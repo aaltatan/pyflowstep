@@ -1,0 +1,84 @@
+[project]
+name = "pyflowstep"
+version = "0.1.0"
+description = "A lightweight, typed Python library for composing functions into readable, reusable flows that can be defined as JSON."
+readme = "README.md"
+authors = [
+    { name = "aaltatan", email = "a.altatan@gmail.com" }
+]
+license = "GPL-3.0-only"
+requires-python = ">=3.12"
+dependencies = []
+keywords = [
+    "flow",
+    "pipeline",
+    "composition",
+    "functional",
+    "fluent-interface",
+    "json",
+    "json-schema",
+    "workflow",
+    "dsl",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Typing :: Typed",
+]
+
+[project.urls]
+Homepage = "https://github.com/aaltatan/pyflowstep"
+Repository = "https://github.com/aaltatan/pyflowstep"
+Issues = "https://github.com/aaltatan/pyflowstep/issues"
+
+[build-system]
+requires = ["uv_build>=0.12.18,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "devtools>=0.12.2",
+    "pyformula>=0.1.1",
+    "pyspecification>=2.0.2",
+    "pytest>=9.1.1",
+    "pytest-coverage>=0.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests", "src"]
+pythonpath = ["."]
+addopts = ["--doctest-modules", "--strict-markers"]
+doctest_optionflags = ["ELLIPSIS", "NORMALIZE_WHITESPACE"]
+
+[tool.coverage.run]
+source = ["pyflowstep"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+exclude_also = ["@overload"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = [
+    "COM812",  # conflicts with the formatter
+    "CPY001",  # no per-file copyright headers
+    "D100", "D101", "D102", "D103", "D104", "D105", "D107", "D203", "D213",
+    "ANN401",  # JSON definitions and processors genuinely handle `Any`
+    "PLR0911",  # guard-clause style validators return early on purpose
+    "PLR0913",  # registration keeps pyspecification's keyword options
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "PLR2004", "ANN", "ARG", "INP001", "E501"]
+"examples/**" = ["T201", "INP001"]
