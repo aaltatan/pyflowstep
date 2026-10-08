@@ -1,15 +1,15 @@
 from inspect import signature
-from typing import Any
+from typing import Annotated
 
 import pytest
 
 from pyflowstep import (
+    Depends,
     Flow,
-    InvalidProcessorsError,
     InvalidStepError,
     InvalidStepNameError,
     MissingArgumentError,
-    ProcessArgumentError,
+    Parse,
     StepAlreadyRegisteredError,
     StepDoesNotExistError,
     StepsRegistry,
@@ -141,15 +141,6 @@ class TestRegistration:
         with pytest.raises(InvalidStepNameError):
             StepsRegistry[int]().register(lambda n: n)
 
-    def test_processors(self) -> None:
-        registry = StepsRegistry[int]()
-
-        @registry.step(processors=int)
-        def add(total: int, amount: int) -> int:
-            return total + amount
-
-        assert add("5")(1) == 6
-
     def test_tap(self) -> None:
         registry = StepsRegistry[list[str]]()
         seen: list[str] = []
@@ -204,125 +195,79 @@ class TestNaming:
         assert factory.__wrapped__ is double  # type: ignore[attr-defined]
 
 
-class TestRegistryProcessors:
-    def test_named_processor_applies_to_positional_and_keyword(self) -> None:
-        registry = StepsRegistry[int]()
+def get_unit() -> str:
+    return "kg"
 
-        @registry.step(processors={"amount": int})
-        def add(total: int, amount: int) -> int:
-            return total + amount
 
-        assert add("2")(1) == 3
-        assert add(amount="2")(1) == 3
+class TestRegistryDependencies:
+    def test_registered_step_with_dependency(self) -> None:
+        registry = StepsRegistry[list[str]]()
 
-    def test_processors_run_once_per_factory_call(self) -> None:
-        calls: list[Any] = []
+        @registry.step()
+        def weigh(items: list[str], amount: int, unit: str = Depends(get_unit)) -> list[str]:
+            return [*items, f"{amount}{unit}"]
 
-        def spy(value: Any) -> Any:
-            calls.append(value)
-            return value
+        assert str(signature(weigh)) == "(amount: int)"
+        assert registry["weigh"](5)([]) == ["5kg"]
 
-        registry = StepsRegistry[int]()
-        add = registry.register(lambda n, x: n + x, name="add", processors=spy)
+    def test_dependency_works_under_another_name(self) -> None:
+        registry = StepsRegistry[list[str]]()
 
-        flow = add(1)
-        flow(0)
-        flow(0)
-        assert calls == [1]
+        @registry.step(name="measure")
+        def weigh(items: list[str], unit: str = Depends(get_unit)) -> list[str]:
+            return [*items, unit]
 
-    def test_failing_processor(self) -> None:
-        registry = StepsRegistry[int]()
+        assert repr(registry["measure"]()) == "Flow(measure)"
+        assert registry["measure"]()([]) == ["kg"]
 
-        @registry.step(processors={"amount": int})
-        def add(total: int, amount: int) -> int:
-            return total + amount
-
-        with pytest.raises(
-            ProcessArgumentError, match="Argument 'amount' with value 'two'"
-        ) as info:
-            add("two")
-        assert isinstance(info.value.__cause__, ValueError)
-
-    def test_bad_arguments_fail_before_processing(self) -> None:
-        registry = StepsRegistry[int]()
-        calls: list[Any] = []
-        add = registry.register(
-            lambda n, x: n + x,
-            name="add",
-            processors=calls.append,
-        )
-
-        with pytest.raises(MissingArgumentError, match="for step 'add'"):
-            add()
-        assert calls == []
-
-    def test_processed_factory_keeps_signature(self) -> None:
-        registry = StepsRegistry[int]()
-
-        @registry.step(processors=int)
-        def add(total: int, amount: int) -> int:
-            return total + amount
-
-        assert str(signature(add)) == "(amount: int)"
-
-    def test_tap_with_processors(self) -> None:
+    def test_tap_with_dependency(self) -> None:
         registry = StepsRegistry[list[str]]()
         seen: list[str] = []
 
-        @registry.tap(processors=str.strip)
-        def remember(_: list[str], value: str) -> None:
+        @registry.tap()
+        def note(_: list[str], unit: str = Depends(get_unit)) -> None:
+            seen.append(unit)
+
+        subject: list[str] = []
+        assert note()(subject) is subject
+        assert seen == ["kg"]
+
+
+class TestRegistryParsing:
+    """`Parse` is read from the step function itself, so it works through the registry."""
+
+    def test_registered_step_parses_its_arguments(self) -> None:
+        registry = StepsRegistry[int]()
+
+        @registry.step()
+        def add(total: int, amount: Annotated[int, Parse(int)]) -> int:
+            return total + amount
+
+        assert registry["add"]("5")(1) == 6
+        assert list(signature(add).parameters) == ["amount"]
+
+    def test_parsing_works_under_another_name(self) -> None:
+        registry = StepsRegistry[int]()
+
+        @registry.step(name="plus")
+        def add(total: int, amount: Annotated[int, Parse(int)]) -> int:
+            return total + amount
+
+        assert registry["plus"]("5")(1) == 6
+
+    def test_tap_parses_its_arguments(self) -> None:
+        registry = StepsRegistry[list[str]]()
+        seen: list[str] = []
+
+        @registry.tap()
+        def remember(_: list[str], value: Annotated[str, Parse(str.strip)]) -> None:
             seen.append(value)
 
         subject: list[str] = []
         assert remember("  v  ")(subject) is subject
         assert seen == ["v"]
 
-    def test_named_processor_leaves_other_arguments_untouched(self) -> None:
-        registry = StepsRegistry[list[Any]]()
-
-        @registry.step(processors={"timeout": float})
-        def wait(log: list[Any], selector: Any, timeout: float = 5.0) -> list[Any]:
-            return [*log, selector, timeout]
-
-        marker = object()
-        assert wait(marker, "10")([]) == [marker, 10.0]
-
-    def test_ellipsis_covers_the_remaining_arguments(self) -> None:
-        registry = StepsRegistry[list[Any]]()
-
-        @registry.step(processors={"pumps": int, ...: str.lower})
-        def add_syrup(log: list[Any], flavor: str, pumps: int = 1) -> list[Any]:
-            return [*log, flavor, pumps]
-
-        assert add_syrup("VANILLA", "2")([]) == ["vanilla", 2]
-        assert add_syrup("MINT")([]) == ["mint", 1]
-
-    def test_typo_fails_at_registration(self) -> None:
-        registry = StepsRegistry[int]()
-
-        with pytest.raises(InvalidProcessorsError, match=r"'wait'.*\['timout'\]"):
-
-            @registry.step(processors={"timout": float})
-            def wait(n: int, timeout: float = 5.0) -> int:
-                return n
-
-        assert "wait" not in registry
-
-    def test_subject_cannot_be_processed(self) -> None:
-        registry = StepsRegistry[int]()
-
-        with pytest.raises(InvalidProcessorsError, match=r"\['total'\]"):
-            registry.register(
-                lambda total, amount: total + amount, name="add", processors={"total": int}
-            )
-
-    def test_old_tuple_form_is_rejected(self) -> None:
-        registry = StepsRegistry[int]()
-
-        with pytest.raises(InvalidProcessorsError, match="must be a callable or a mapping"):
-            registry.register(lambda n, x: n, name="add", processors=(int, {}))  # type: ignore[arg-type]
-
-    def test_no_processors_means_no_wrapper(self) -> None:
+    def test_no_markers_means_no_wrapper(self) -> None:
         registry = StepsRegistry[int]()
 
         def double(n: int) -> int:

@@ -22,16 +22,18 @@ Steps collected in a `StepsRegistry` can also be described as JSON
 """
 
 from .compilers import FlowCompiler, FlowDefinition, StepDict, validate_step_dict
+from .dependencies import Depends, override_dependencies
 from .exceptions import (
     ArgumentError,
+    InvalidDependencyError,
     InvalidFlowDefinitionError,
-    InvalidProcessorsError,
+    InvalidParserError,
     InvalidStepError,
     InvalidStepNameError,
     MissingArgumentError,
     MultipleValuesArgumentError,
+    ParseArgumentError,
     PositionalOnlyArgumentError,
-    ProcessArgumentError,
     PyflowstepError,
     StepAlreadyRegisteredError,
     StepDoesNotExistError,
@@ -40,23 +42,27 @@ from .exceptions import (
 )
 from .flow import Action, Flow, compose
 from .json_schema import get_flow_json_schema, get_json_schema, get_step_json_schema
+from .parsers import Parse
 from .registry import StepsRegistry
 from .steps import StepFactory, StepFn, TapFn, step, tap
 
 __all__ = [
     "Action",
     "ArgumentError",
+    "Depends",
     "Flow",
     "FlowCompiler",
     "FlowDefinition",
+    "InvalidDependencyError",
     "InvalidFlowDefinitionError",
-    "InvalidProcessorsError",
+    "InvalidParserError",
     "InvalidStepError",
     "InvalidStepNameError",
     "MissingArgumentError",
     "MultipleValuesArgumentError",
+    "Parse",
+    "ParseArgumentError",
     "PositionalOnlyArgumentError",
-    "ProcessArgumentError",
     "PyflowstepError",
     "StepAlreadyRegisteredError",
     "StepDict",
@@ -71,6 +77,7 @@ __all__ = [
     "get_flow_json_schema",
     "get_json_schema",
     "get_step_json_schema",
+    "override_dependencies",
     "step",
     "tap",
     "validate_step_dict",

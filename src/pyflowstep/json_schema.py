@@ -24,6 +24,9 @@ from typing import (
 )
 from uuid import UUID
 
+from .annotations import annotated_metadata, resolved_annotations
+from .parsers import Parse, input_annotation
+
 JSON_SCHEMA_DIALECT = "https://json-schema.org/draft/2020-12/schema"
 
 _SCALAR_SCHEMAS: dict[Any, dict[str, Any]] = {
@@ -49,7 +52,9 @@ _KEYWORD_KINDS = (Parameter.POSITIONAL_OR_KEYWORD, Parameter.KEYWORD_ONLY)
 def get_json_schema(annotation: Any) -> dict[str, Any]:
     """Return the JSON Schema of a Python type annotation.
 
-    Unknown or unannotated types map to `{}`, which accepts any value.
+    Unknown or unannotated types map to `{}`, which accepts any value. A type
+    marked with `Parse(fn)` is described by what `fn` accepts, because that is
+    what the JSON has to send.
 
     Example:
     ```python
@@ -77,7 +82,7 @@ def get_json_schema(annotation: Any) -> dict[str, Any]:
         return get_json_schema(annotation.__value__)
 
     if origin in _WRAPPER_ORIGINS:
-        return get_json_schema(get_args(annotation)[0])
+        return get_json_schema(_sent_annotation(annotation))
 
     if origin is Literal:
         return _enum_schema(list(get_args(annotation)))
@@ -121,7 +126,7 @@ def get_step_json_schema(name: str, step: Callable[..., Any]) -> dict[str, Any]:
 
     """
     parameters = list(signature(step).parameters.values())
-    annotations = _resolved_annotations(step)
+    annotations = resolved_annotations(step)
 
     def parameter_schema(parameter: Parameter) -> dict[str, Any]:
         schema = get_json_schema(annotations.get(parameter.name, Any))
@@ -232,12 +237,13 @@ def _typeddict_schema(annotation: Any) -> dict[str, Any]:
     }
 
 
-def _resolved_annotations(fn: Callable[..., Any]) -> dict[str, Any]:
-    """Evaluate string annotations when possible, fall back to the raw ones."""
-    try:
-        return get_annotations(fn, eval_str=True)
-    except NameError:
-        return get_annotations(fn)
+def _sent_annotation(annotation: Any) -> Any:
+    """Return the type the JSON must send for an `Annotated`/`Required`/`NotRequired` type."""
+    parser = next(
+        (item for item in annotated_metadata(annotation) if isinstance(item, Parse)), None
+    )
+    sent = input_annotation(parser) if parser else None
+    return get_args(annotation)[0] if sent is None else sent
 
 
 def _is_json_value(value: Any) -> bool:

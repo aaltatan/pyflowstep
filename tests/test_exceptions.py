@@ -2,13 +2,15 @@ import pytest
 
 from pyflowstep import (
     ArgumentError,
+    InvalidDependencyError,
     InvalidFlowDefinitionError,
+    InvalidParserError,
     InvalidStepError,
     InvalidStepNameError,
     MissingArgumentError,
     MultipleValuesArgumentError,
+    ParseArgumentError,
     PositionalOnlyArgumentError,
-    ProcessArgumentError,
     PyflowstepError,
     StepAlreadyRegisteredError,
     StepDoesNotExistError,
@@ -26,6 +28,8 @@ class TestHierarchy:
             StepAlreadyRegisteredError,
             StepDoesNotExistError,
             InvalidStepError,
+            InvalidDependencyError,
+            InvalidParserError,
             InvalidStepNameError,
             InvalidFlowDefinitionError,
             ArgumentError,
@@ -42,7 +46,7 @@ class TestHierarchy:
             UnexpectedKeywordArgumentError,
             MultipleValuesArgumentError,
             PositionalOnlyArgumentError,
-            ProcessArgumentError,
+            ParseArgumentError,
         ],
     )
     def test_argument_errors(self, error: type[Exception]) -> None:

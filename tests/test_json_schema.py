@@ -7,6 +7,8 @@ from uuid import UUID
 import pytest
 
 from pyflowstep import (
+    Depends,
+    Parse,
     StepsRegistry,
     get_flow_json_schema,
     get_json_schema,
@@ -212,3 +214,93 @@ class TestGetFlowJsonSchema:
 
     def test_empty_registry(self) -> None:
         assert get_flow_json_schema({})["items"] == {"oneOf": []}
+
+
+class TestDependenciesAreHidden:
+    def test_dependency_is_absent_from_the_step_schema(self) -> None:
+        def get_page_size() -> int:
+            return 20
+
+        @step
+        def paginate(
+            page: object,
+            number: int,
+            size: int = Depends(get_page_size),
+            *,
+            limit: Annotated[int, Depends(get_page_size)],
+            order: str = "asc",
+        ) -> object:
+            return page
+
+        properties = get_step_json_schema("paginate", paginate)["properties"]
+
+        assert properties["args"]["prefixItems"] == [{"type": "integer"}]
+        assert list(properties["kwargs"]["properties"]) == ["number", "order"]
+        assert properties["kwargs"]["required"] == []
+
+
+def load_rows(path: str) -> list[dict[str, int]]:
+    return [{"path": len(path)}]
+
+
+class Loader:
+    def __init__(self, source: Literal["disk", "cloud"]) -> None:
+        self.source = source
+
+
+type Rows = Annotated[list[dict[str, int]], Parse(load_rows)]
+
+
+class TestParsedTypes:
+    """A parsed type is described by what its parser accepts: that is what the JSON sends."""
+
+    def test_schema_follows_the_parser_input(self) -> None:
+        assert get_json_schema(Annotated[list[dict[str, int]], Parse(load_rows)]) == {
+            "type": "string"
+        }
+
+    def test_through_a_type_alias(self) -> None:
+        assert get_json_schema(Rows) == {"type": "string"}
+
+    def test_class_as_parser_uses_its_init(self) -> None:
+        assert get_json_schema(Annotated[Loader, Parse(Loader)]) == {
+            "enum": ["disk", "cloud"],
+            "type": "string",
+        }
+
+    @pytest.mark.parametrize(
+        "parser", [int, float, str.strip, Decimal, date.fromisoformat, lambda value: value]
+    )
+    def test_parser_without_input_annotation_falls_back_to_the_declared_type(
+        self, parser: Any
+    ) -> None:
+        assert get_json_schema(Annotated[int, Parse(parser)]) == {"type": "integer"}
+
+    def test_enum_parser_keeps_the_enum_schema(self) -> None:
+        assert get_json_schema(Annotated[Color, Parse(Color)]) == {
+            "enum": ["red", "blue"],
+            "type": "string",
+        }
+
+    def test_only_the_first_parser_decides(self) -> None:
+        annotation = Annotated[list[dict[str, int]], Parse(str.strip), Parse(load_rows)]
+        assert get_json_schema(annotation) == {
+            "type": "array",
+            "items": get_json_schema(dict[str, int]),
+        }
+
+    def test_other_metadata_is_ignored(self) -> None:
+        assert get_json_schema(Annotated[int, "meta", Parse(load_rows)]) == {"type": "string"}
+
+    def test_step_schema_uses_parsed_types(self) -> None:
+        @step
+        def merge(
+            data: object, key: str, rows: Rows, *more: Rows, limit: Annotated[int, Parse(int)] = 5
+        ) -> object:
+            return data
+
+        properties = get_step_json_schema("merge", merge)["properties"]
+
+        assert properties["args"]["prefixItems"] == [{"type": "string"}, {"type": "string"}]
+        assert properties["args"]["items"] == {"type": "string"}
+        assert properties["kwargs"]["properties"]["limit"] == {"type": "integer", "default": 5}

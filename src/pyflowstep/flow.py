@@ -4,6 +4,8 @@ from collections.abc import Callable, Iterator
 from functools import reduce
 from typing import Any
 
+from .dependencies import run_scope
+
 type Action[T] = Callable[[T], T]
 
 
@@ -46,7 +48,8 @@ class Flow[T]:
         return self._actions
 
     def __call__(self, obj: T) -> T:
-        return reduce(lambda obj, action: action(obj), self._actions, obj)
+        with run_scope():
+            return reduce(lambda obj, action: action(obj), self._actions, obj)
 
     def __rshift__(self, other: Action[T]) -> "Flow[T]":
         if not callable(other):

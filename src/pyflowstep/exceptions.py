@@ -41,11 +41,19 @@ class InvalidStepError(PyflowstepError, TypeError):
     """
 
 
-class InvalidProcessorsError(PyflowstepError, TypeError):
-    """Raised when the `processors` option of a step is malformed.
+class InvalidDependencyError(PyflowstepError, TypeError):
+    """Raised when a `Depends(...)` declaration cannot work.
 
-    It must be a callable, or a mapping of parameter names (or `...`) to
-    callables, and every name must be a parameter of the step.
+    For example a provider that is not callable, is circular, or has a required
+    parameter that is not itself a dependency.
+    """
+
+
+class InvalidParserError(PyflowstepError, TypeError):
+    """Raised when a `Parse(...)` marker cannot work.
+
+    For example a parser that is not callable, a marker on the subject, or a
+    marker used as a default value instead of inside `Annotated`.
     """
 
 
@@ -81,8 +89,8 @@ class PositionalOnlyArgumentError(ArgumentError):
     """Raised when a positional-only step argument is passed as a keyword."""
 
 
-class ProcessArgumentError(ArgumentError):
-    """Raised when a processor fails to transform a step argument."""
+class ParseArgumentError(ArgumentError):
+    """Raised when a `Parse` function fails on the value given for a step argument."""
 
 
 _ARGUMENT_ERROR_PATTERNS: tuple[tuple[str, type[ArgumentError]], ...] = (
