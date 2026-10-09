@@ -1,18 +1,18 @@
 """Run inputs: hand a flow the values only its caller has, when it runs.
 
-A step parameter annotated with `Input[T]` is not an argument of the step:
+A step parameter whose default is `Input()` is not an argument of the step:
 nobody passes it while the flow is built, neither Python nor JSON. The caller
 supplies it by name when it runs the flow:
 
     @step
-    def fill_year(page: Page, selector: str, voucher: Input[Voucher]) -> Page: ...
+    def fill_year(page: Page, selector: str, voucher: Voucher = Input()) -> Page: ...
 
     flow = fill_year("#year")      # only `selector` is an argument
     flow(page, voucher=voucher)    # `voucher` is supplied for this run
 
 The name of the input is the name of the parameter. A flow checks the inputs
 its steps require before the first step runs, so a forgotten one never fails
-halfway through. A parameter with a default value is an optional input.
+halfway through. `Input(default=...)` makes the input optional.
 
 Use `Depends` when a provider can build the object, and `Input` when only the
 caller of the flow has it.
@@ -21,7 +21,7 @@ Example:
 ```python
 >>> from pyflowstep import step
 >>> @step
-... def add_tax(price: float, rate: Input[float]) -> float:
+... def add_tax(price: float, rate: float = Input()) -> float:
 ...     return price * (1 + rate)
 >>> add_tax()(100.0, rate=0.25)
 125.0
@@ -37,89 +37,142 @@ pyflowstep.exceptions.MissingInputError: missing run input 'rate' for step 'add_
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from inspect import Parameter, signature
-from typing import Annotated, Any
+from typing import Any
 
 from .annotations import annotated_metadata, resolved_annotations
-from .dependencies import Run
 from .exceptions import InvalidInputError, MissingInputError
 
-_UNSUPPORTED_KINDS = (Parameter.POSITIONAL_ONLY, Parameter.VAR_POSITIONAL, Parameter.VAR_KEYWORD)
 _REQUIRED_INPUTS = "__pyflowstep_inputs__"
+
+
+class _Required:
+    """The default of an input that has none: the caller must supply it."""
+
+    def __repr__(self) -> str:
+        return "<required>"
+
+
+_REQUIRED: Any = _Required()
 
 
 @dataclass(frozen=True, slots=True)
 class RunInput:
-    """The marker carried by `Input[T]`: "the caller of the flow supplies this parameter"."""
+    """The marker created by `Input`: "the caller of the flow supplies this parameter"."""
+
+    default: Any = _REQUIRED
+
+    @property
+    def required(self) -> bool:
+        """Whether the caller must supply the input."""
+        return self.default is _REQUIRED
 
 
-type Input[T] = Annotated[T, RunInput()]
+def Input(*, default: Any = _REQUIRED) -> Any:  # noqa: N802
+    """Mark a step parameter as supplied by the caller when the flow runs.
 
+    Use it as the default value of the parameter. The parameter stops being an
+    argument of the step; `flow(subject, name=value)` fills it for one run.
 
-def find_inputs(fn: Callable[..., Any]) -> dict[str, bool]:
-    """Return the parameters of `fn` marked with `Input`, mapped to whether they are required.
+    Args:
+        default: The value used when the caller supplies none, which makes the
+            input optional. Without it the input is required.
 
     Example:
     ```python
-    >>> def add_tax(price: float, label: str, rate: Input[float], bonus: Input[float] = 0.0): ...
-    >>> find_inputs(add_tax)
+    >>> from pyflowstep import step
+    >>> @step
+    ... def greet(names: list, user: str = Input(), mark: str = Input(default="!")) -> list:
+    ...     return [*names, user + mark]
+    >>> greet()([], user="Ada")
+    ['Ada!']
+    >>> greet()([], user="Ada", mark="?")
+    ['Ada?']
+    >>> sorted(greet().inputs)
+    ['user']
+
+    ```
+
+    """
+    return RunInput(default)
+
+
+def find_inputs(fn: Callable[..., Any]) -> dict[str, RunInput]:
+    """Return the parameters of `fn` whose default is `Input()`, by name.
+
+    Example:
+    ```python
+    >>> def add_tax(price: float, rate: float = Input(), bonus: float = Input(default=0.0)): ...
+    >>> {name: marker.required for name, marker in find_inputs(add_tax).items()}
     {'rate': True, 'bonus': False}
 
     ```
 
     """
-    annotations = resolved_annotations(fn)
     return {
-        name: parameter.default is Parameter.empty
+        name: parameter.default
         for name, parameter in signature(fn).parameters.items()
-        if any(isinstance(item, RunInput) for item in annotated_metadata(annotations.get(name)))
+        if isinstance(parameter.default, RunInput)
     }
 
 
-def step_inputs(fn: Callable[..., Any], step_name: str) -> dict[str, bool]:
+def step_inputs(fn: Callable[..., Any], step_name: str) -> dict[str, RunInput]:
     """Return the inputs of a step function after validating them.
 
     Raises:
-        InvalidInputError: If the subject is marked, or an input sits on a
-            positional-only, `*args` or `**kwargs` parameter.
+        InvalidInputError: If the subject or a positional-only parameter is
+            marked, or `Input()` is used inside `Annotated` instead of as a default.
 
     """
     inputs = find_inputs(fn)
     parameters = signature(fn).parameters
+    annotations = resolved_annotations(fn)
     subject = next(iter(parameters))
+
+    for name in parameters:
+        if any(isinstance(item, RunInput) for item in annotated_metadata(annotations.get(name))):
+            msg = (
+                f"Step '{step_name}' uses Input inside Annotated for '{name}'; write it as the "
+                f"default value, `{name}: <type> = Input()`, so type checkers see the parameter "
+                "as optional"
+            )
+            raise InvalidInputError(msg)
 
     if subject in inputs:
         msg = f"Step '{step_name}' cannot take its subject '{subject}' as a run input"
         raise InvalidInputError(msg)
 
     for name in inputs:
-        if parameters[name].kind in _UNSUPPORTED_KINDS:
+        if parameters[name].kind is Parameter.POSITIONAL_ONLY:
             msg = (
-                f"Step '{step_name}' cannot take {parameters[name].kind.description} "
-                f"parameter '{name}' as a run input"
+                f"Step '{step_name}' cannot take positional-only parameter '{name}' as a run input"
             )
             raise InvalidInputError(msg)
 
     return inputs
 
 
-def resolve_inputs(run: Run, inputs: Mapping[str, bool], step_name: str) -> dict[str, Any]:
-    """Return the value of every input the run was given, optional ones only when present.
+def resolve_inputs(
+    given: Mapping[str, Any],
+    inputs: Mapping[str, RunInput],
+    step_name: str,
+) -> dict[str, Any]:
+    """Return the value of every input: the one `given`, or the default of an optional input.
 
     Raises:
-        MissingInputError: If the run was not given a required input.
+        MissingInputError: If a required input was not given.
 
     """
-    missing = [name for name, required in inputs.items() if required and name not in run.inputs]
+    missing = [name for name, marker in inputs.items() if marker.required and name not in given]
 
     if missing:
         raise MissingInputError(_missing_message((name, step_name) for name in missing))
 
-    return {name: run.inputs[name] for name in inputs if name in run.inputs}
+    return {name: given.get(name, marker.default) for name, marker in inputs.items()}
 
 
-def mark_required_inputs(action: Callable[..., Any], inputs: Mapping[str, bool]) -> None:
+def mark_required_inputs(action: Callable[..., Any], inputs: Mapping[str, RunInput]) -> None:
     """Record on a step action the inputs it requires, for `required_inputs` to read."""
-    required = frozenset(name for name, required in inputs.items() if required)
+    required = frozenset(name for name, marker in inputs.items() if marker.required)
     setattr(action, _REQUIRED_INPUTS, required)
 
 
@@ -130,7 +183,7 @@ def required_inputs(action: Callable[..., Any]) -> frozenset[str]:
     ```python
     >>> from pyflowstep import step
     >>> @step
-    ... def add_tax(price: float, rate: Input[float], bonus: Input[float] = 0.0) -> float:
+    ... def add_tax(price: float, rate: float = Input(), bonus: float = Input(default=0.0)):
     ...     return price * (1 + rate) + bonus
     >>> required_inputs(add_tax().actions[0])
     frozenset({'rate'})

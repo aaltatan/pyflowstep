@@ -50,10 +50,11 @@ class InvalidDependencyError(PyflowstepError, TypeError):
 
 
 class InvalidInputError(PyflowstepError, TypeError):
-    """Raised when an `Input[...]` declaration cannot work.
+    """Raised when an `Input()` declaration cannot work.
 
-    For example an input on the subject, on a positional-only, `*args` or
-    `**kwargs` parameter, or on a parameter that is also a dependency.
+    For example an input on the subject, on a positional-only parameter, on a
+    parameter that is also a dependency, or written inside `Annotated` instead
+    of as the default value.
     """
 
 

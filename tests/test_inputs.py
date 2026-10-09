@@ -1,5 +1,5 @@
 from inspect import signature
-from typing import Annotated, Any
+from typing import Annotated
 
 import pytest
 
@@ -20,62 +20,66 @@ from pyflowstep import (
     step,
     tap,
 )
-from pyflowstep.inputs import find_inputs, required_inputs
-
-type Prefix = Input[str]
+from pyflowstep.inputs import RunInput, find_inputs, required_inputs
 
 
 @step
-def prefixed(items: list[str], item: str, prefix: Input[str]) -> list[str]:
+def prefixed(items: list[str], item: str, prefix: str = Input()) -> list[str]:
     return [*items, prefix + item]
 
 
 @step
-def suffixed(items: list[str], item: str, suffix: Input[str] = "") -> list[str]:
+def suffixed(items: list[str], item: str, suffix: str = Input(default="")) -> list[str]:
     return [*items, item + suffix]
 
 
 class TestDeclaration:
+    def test_input_returns_a_marker(self) -> None:
+        assert Input() == RunInput()
+        assert Input().required
+        assert not Input(default=None).required
+        assert Input(default=None).default is None
+        assert repr(Input()) == "RunInput(default=<required>)"
+
     def test_find_inputs_tells_required_from_optional(self) -> None:
-        def fn(subject: int, plain: str, rate: Input[float], bonus: Input[float] = 0.0) -> int: ...
+        def fn(
+            subject: int, plain: str, rate: float = Input(), bonus: float = Input(default=0.0)
+        ) -> int: ...
 
-        assert find_inputs(fn) == {"rate": True, "bonus": False}
+        inputs = find_inputs(fn)
 
-    def test_alias_of_an_input(self) -> None:
-        @step
-        def use(items: list[str], prefix: Prefix) -> list[str]:
-            return [*items, prefix]
-
-        assert use()([], prefix=">") == [">"]
+        assert list(inputs) == ["rate", "bonus"]
+        assert inputs["rate"].required
+        assert not inputs["bonus"].required
 
     def test_string_annotations(self) -> None:
         @step
-        def use(items: list[str], prefix: "Input[str]") -> list[str]:
+        def use(items: "list[str]", prefix: "str" = Input()) -> "list[str]":
             return [*items, prefix]
 
         assert use()([], prefix=">") == [">"]
 
     def test_input_between_ordinary_parameters(self) -> None:
         @step
-        def use(items: list[str], first: str, prefix: Input[str], last: str = "!") -> list[str]:
+        def use(items: list[str], first: str, prefix: str = Input(), last: str = "!") -> list[str]:
             return [*items, prefix + first + last]
 
         assert use("a")([], prefix=">") == [">a!"]
         assert use("a", "?")([], prefix=">") == [">a?"]
         assert use("a", last="?")([], prefix=">") == [">a?"]
 
-    def test_keyword_only_input(self) -> None:
+    def test_keyword_only_input_before_a_required_argument(self) -> None:
         @step
-        def use(items: list[str], *extra: str, prefix: Input[str]) -> list[str]:
-            return [*items, *(prefix + item for item in extra)]
+        def use(items: list[str], *, prefix: str = Input(), item: str) -> list[str]:
+            return [*items, prefix + item]
 
-        assert use("a", "b")([], prefix=">") == [">a", ">b"]
+        assert use(item="a")([], prefix=">") == [">a"]
 
     def test_tap_with_input(self) -> None:
         seen: list[str] = []
 
         @tap
-        def record(items: list[str], prefix: Input[str]) -> None:
+        def record(items: list[str], prefix: str = Input()) -> None:
             seen.append(prefix)
 
         assert record()(["a"], prefix=">") == ["a"]
@@ -84,7 +88,7 @@ class TestDeclaration:
     def test_input_next_to_a_dependency(self) -> None:
         @step
         def use(
-            items: list[str], prefix: Input[str], mark: str = Depends(lambda: "!")
+            items: list[str], prefix: str = Input(), mark: str = Depends(lambda: "!")
         ) -> list[str]:
             return [*items, prefix + mark]
 
@@ -94,6 +98,7 @@ class TestDeclaration:
 class TestInvisibleArguments:
     def test_factory_signature_hides_inputs(self) -> None:
         assert list(signature(prefixed).parameters) == ["item"]
+        assert list(signature(suffixed).parameters) == ["item"]
 
     def test_cannot_be_passed_positionally(self) -> None:
         with pytest.raises(TooManyArgumentsError):
@@ -126,13 +131,21 @@ class TestRunning:
         assert suffixed("a")([]) == ["a"]
         assert suffixed("a")([], suffix="!") == ["a!"]
 
+    def test_optional_input_may_default_to_none(self) -> None:
+        @step
+        def use(items: list[str], mark: str | None = Input(default=None)) -> list[str]:
+            return [*items, repr(mark)]
+
+        assert use()([]) == ["None"]
+        assert use().inputs == frozenset()
+
     def test_extra_inputs_are_ignored(self) -> None:
         assert prefixed("a")([], prefix=">", unused=1) == [">a"]
         assert Flow[int](abs)(-1, unused=1) == 1
 
     def test_an_input_may_be_named_like_the_subject_parameter(self) -> None:
         @step
-        def use(items: list[str], obj: Input[str]) -> list[str]:
+        def use(items: list[str], obj: str = Input()) -> list[str]:
             return [*items, obj]
 
         assert use()([], obj="x") == ["x"]
@@ -170,7 +183,7 @@ class TestMissingInputs:
 
     def test_message_names_every_input_and_step(self) -> None:
         @step
-        def named(items: list[str], prefix: Input[str], name: Input[str]) -> list[str]:
+        def named(items: list[str], prefix: str = Input(), name: str = Input()) -> list[str]:
             return [*items, prefix + name]
 
         flow = prefixed("a") >> named()
@@ -254,10 +267,9 @@ class TestNestedFlows:
 class TestCompiledFlows:
     def test_json_flow_receives_inputs_and_cannot_set_them(self) -> None:
         registry = StepsRegistry[list[str]]()
-        registry.register(lambda items, item, prefix: [*items, prefix + item], name="plain")
 
         @registry.step()
-        def push(items: list[str], item: str, prefix: Input[str]) -> list[str]:
+        def push(items: list[str], item: str, prefix: str = Input()) -> list[str]:
             return [*items, prefix + item]
 
         compiler = FlowCompiler(registry.steps)
@@ -274,42 +286,43 @@ class TestCompiledFlows:
 
 class TestInvalidDeclarations:
     def test_subject_cannot_be_an_input(self) -> None:
-        def fn(items: Input[list[str]]) -> list[str]: ...
+        def fn(items: list[str] = Input()) -> list[str]: ...
 
         with pytest.raises(InvalidInputError, match="subject 'items'"):
             step(fn)
 
-    @pytest.mark.parametrize(
-        ("source", "kind"),
-        [
-            ("def fn(items, prefix: Input[str], /): ...", "positional-only"),
-            ("def fn(items, *prefix: Input[str]): ...", "variadic positional"),
-            ("def fn(items, **prefix: Input[str]): ...", "variadic keyword"),
-        ],
-    )
-    def test_unsupported_parameter_kinds(self, source: str, kind: str) -> None:
-        namespace: dict[str, Any] = {"Input": Input}
-        exec(source, namespace)  # noqa: S102
+    def test_positional_only_parameter_cannot_be_an_input(self) -> None:
+        def fn(items: list[str], prefix: str = Input(), /) -> list[str]: ...
 
-        with pytest.raises(InvalidInputError, match=kind):
-            step(namespace["fn"])
+        with pytest.raises(InvalidInputError, match="positional-only parameter 'prefix'"):
+            step(fn)
+
+    def test_input_inside_annotated_is_rejected(self) -> None:
+        def fn(items: list[str], prefix: Annotated[str, Input()]) -> list[str]: ...
+
+        with pytest.raises(InvalidInputError, match=r"`prefix: <type> = Input\(\)`"):
+            step(fn)
 
     def test_parameter_cannot_be_both_a_dependency_and_an_input(self) -> None:
-        def fn(items: list[str], prefix: Input[str] = Depends(lambda: ">")) -> list[str]: ...
+        def fn(
+            items: list[str], prefix: Annotated[str, Depends(lambda: ">")] = Input()
+        ) -> list[str]: ...
 
         with pytest.raises(InvalidInputError, match="both as a dependency and as a run input"):
             step(fn)
 
     def test_parameter_cannot_be_both_parsed_and_an_input(self) -> None:
-        def fn(items: list[str], prefix: Annotated[Input[str], Parse(str.strip)]) -> list[str]: ...
+        def fn(
+            items: list[str], prefix: Annotated[str, Parse(str.strip)] = Input()
+        ) -> list[str]: ...
 
         with pytest.raises(InvalidParserError, match="cannot both parse and inject"):
             step(fn)
 
     def test_provider_cannot_take_an_input(self) -> None:
-        def provider(prefix: Input[str]) -> str: ...
+        def provider(prefix: str = Input()) -> str: ...
 
         def fn(items: list[str], obj: str = Depends(provider)) -> list[str]: ...
 
-        with pytest.raises(InvalidDependencyError, match="required parameter 'prefix'"):
+        with pytest.raises(InvalidDependencyError, match="cannot take the run input 'prefix'"):
             step(fn)
