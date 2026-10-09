@@ -2,6 +2,7 @@ from inspect import signature
 from typing import Annotated
 
 import pytest
+from pyargprocessors import Process
 
 from pyflowstep import (
     Depends,
@@ -9,7 +10,6 @@ from pyflowstep import (
     InvalidStepError,
     InvalidStepNameError,
     MissingArgumentError,
-    Parse,
     StepAlreadyRegisteredError,
     StepDoesNotExistError,
     StepsRegistry,
@@ -233,34 +233,34 @@ class TestRegistryDependencies:
         assert seen == ["kg"]
 
 
-class TestRegistryParsing:
-    """`Parse` is read from the step function itself, so it works through the registry."""
+class TestRegistryProcessing:
+    """`Process` is read from the step function itself, so it works through the registry."""
 
-    def test_registered_step_parses_its_arguments(self) -> None:
+    def test_registered_step_processes_its_arguments(self) -> None:
         registry = StepsRegistry[int]()
 
         @registry.step()
-        def add(total: int, amount: Annotated[int, Parse(int)]) -> int:
+        def add(total: int, amount: Annotated[int, Process(int)]) -> int:
             return total + amount
 
         assert registry["add"]("5")(1) == 6
         assert list(signature(add).parameters) == ["amount"]
 
-    def test_parsing_works_under_another_name(self) -> None:
+    def test_processing_works_under_another_name(self) -> None:
         registry = StepsRegistry[int]()
 
         @registry.step(name="plus")
-        def add(total: int, amount: Annotated[int, Parse(int)]) -> int:
+        def add(total: int, amount: Annotated[int, Process(int)]) -> int:
             return total + amount
 
         assert registry["plus"]("5")(1) == 6
 
-    def test_tap_parses_its_arguments(self) -> None:
+    def test_tap_processes_its_arguments(self) -> None:
         registry = StepsRegistry[list[str]]()
         seen: list[str] = []
 
         @registry.tap()
-        def remember(_: list[str], value: Annotated[str, Parse(str.strip)]) -> None:
+        def remember(_: list[str], value: Annotated[str, Process(str.strip)]) -> None:
             seen.append(value)
 
         subject: list[str] = []

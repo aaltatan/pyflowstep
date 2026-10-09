@@ -1,29 +1,31 @@
-"""Parsing: turn raw strings from a web form into typed step arguments.
+"""Processing: turn raw strings from a web form into typed step arguments.
 
 A shop lets users filter its catalog with a form. Everything a form sends is a
 string ("4", "yes", "  HeadPhones "), while the steps want numbers, booleans,
-clean text and even loaded data. `Parse` bridges that gap, right next to the
+clean text and even loaded data. `Process` bridges that gap, right next to the
 parameter it applies to:
 
-    limit: Annotated[int, Parse(int)] = 3     one parameter
-    type Money = Annotated[Decimal, Parse(Decimal)]
+    limit: Annotated[int, Process(int)] = 3   one parameter
+    type Money = Annotated[Decimal, Process(Decimal)]
                                               named once, reused in many steps
-    type Text = Annotated[str, Parse(str.strip), Parse(str.lower)]
-                                              several parsers, left to right
+    type Text = Annotated[str, Process(str.strip), Process(str.lower)]
+                                              several processors, left to right
     **fields: Text                            every extra keyword
-    type Names = Annotated[frozenset[str], Parse(load_names)]
+    type Names = Annotated[frozenset[str], Process(load_names)]
                                               the form sends a path, the step gets the data
 
-Parsing happens when the flow is built, so a bad value fails before anything runs.
+Processing happens when the flow is built, so a bad value fails before anything runs.
 
-Run it with `uv run python -m examples.parsing`.
+Run it with `uv run python -m examples.processing`.
 """
 
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import Annotated
 
-from pyflowstep import FlowCompiler, Parse, ParseArgumentError, StepsRegistry, get_step_json_schema
+from pyargprocessors import Process, ProcessArgumentError
+
+from pyflowstep import FlowCompiler, StepsRegistry, get_step_json_schema
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,7 +44,7 @@ type Catalog = tuple[Product, ...]
 FILES = {"discontinued.txt": "Travel Headphones\nKids Headphones\n"}
 
 
-def parse_bool(text: str) -> bool:
+def to_bool(text: str) -> bool:
     """Read checkbox-like values: yes/no, true/false, on/off, 1/0."""
     return text.strip().lower() in {"yes", "true", "on", "1"}
 
@@ -52,10 +54,10 @@ def load_names(path: str) -> frozenset[str]:
     return frozenset(line.strip().lower() for line in FILES[path].splitlines())
 
 
-# Parsed types, named once and reused by the steps below.
-type Money = Annotated[Decimal, Parse(Decimal)]
-type Text = Annotated[str, Parse(str.strip), Parse(str.lower)]
-type Names = Annotated[frozenset[str], Parse(load_names)]
+# Processed types, named once and reused by the steps below.
+type Money = Annotated[Decimal, Process(Decimal)]
+type Text = Annotated[str, Process(str.strip), Process(str.lower)]
+type Names = Annotated[frozenset[str], Process(load_names)]
 
 catalog_steps = StepsRegistry[Catalog]()
 
@@ -74,16 +76,18 @@ def price_between(products: Catalog, low: Money, high: Money) -> Catalog:
     return tuple(product for product in products if low <= product.price <= high)
 
 
-# 3. One marked parameter: `by` stays a plain string, the default 3 is not parsed.
+# 3. One marked parameter: `by` stays a plain string, the default 3 is not processed.
 @catalog_steps.step()
-def top(products: Catalog, by: str, limit: Annotated[int, Parse(int)] = 3) -> Catalog:
+def top(products: Catalog, by: str, limit: Annotated[int, Process(int)] = 3) -> Catalog:
     """Keep the `limit` best products by a numeric field."""
     return tuple(sorted(products, key=lambda product: getattr(product, by), reverse=True)[:limit])
 
 
-# 4. Chained parsers: `Text` strips, then lowercases.
+# 4. Chained processors: `Text` strips, then lowercases.
 @catalog_steps.step()
-def search(products: Catalog, text: Text, min_stars: Annotated[float, Parse(float)] = 0) -> Catalog:
+def search(
+    products: Catalog, text: Text, min_stars: Annotated[float, Process(float)] = 0
+) -> Catalog:
     """Keep well-rated products whose name contains `text`."""
     return tuple(
         product
@@ -92,12 +96,12 @@ def search(products: Catalog, text: Text, min_stars: Annotated[float, Parse(floa
     )
 
 
-# 5. On `**fields` the parser applies to every extra keyword.
+# 5. On `**fields` the processor applies to every extra keyword.
 @catalog_steps.step()
 def where(
     products: Catalog,
     *,
-    in_stock: Annotated[bool, Parse(parse_bool)] = False,
+    in_stock: Annotated[bool, Process(to_bool)] = False,
     **fields: Text,
 ) -> Catalog:
     """Keep products matching every given text field, e.g. brand="sonic"."""
@@ -154,8 +158,8 @@ def main() -> None:
         compiler.compile(
             [{"name": "in_category", "args": ["audio"]}, {"name": "top", "args": ["stars", "two"]}]
         )
-    except ParseArgumentError as error:
-        print(f"ParseArgumentError: {error} ({error.__notes__[0]})")
+    except ProcessArgumentError as error:
+        print(f"ProcessArgumentError: {error} ({error.__notes__[0]})")
 
 
 if __name__ == "__main__":

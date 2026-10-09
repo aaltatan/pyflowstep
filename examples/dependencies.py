@@ -21,10 +21,11 @@ from dataclasses import dataclass, field, replace
 from decimal import Decimal
 from typing import Annotated
 
+from pyargprocessors import Process
+
 from pyflowstep import (
     Depends,
     FlowCompiler,
-    Parse,
     StepsRegistry,
     UnexpectedKeywordArgumentError,
     get_step_json_schema,
@@ -107,7 +108,7 @@ fulfilment_steps = StepsRegistry[Order]()
 
 
 @fulfilment_steps.step()
-def discount(order: Order, percent: Annotated[Decimal, Parse(Decimal)]) -> Order:
+def discount(order: Order, percent: Annotated[Decimal, Process(Decimal)]) -> Order:
     """Apply a discount: an ordinary step, `percent` comes from the JSON."""
     return replace(order, total=order.total * (1 - percent / 100))
 

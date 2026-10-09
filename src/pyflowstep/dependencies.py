@@ -33,7 +33,8 @@ from inspect import Parameter, isgeneratorfunction, signature
 from types import MappingProxyType
 from typing import Any
 
-from .annotations import annotated_metadata, resolved_annotations
+from pyargprocessors import annotated_metadata, resolved_annotations
+
 from .exceptions import InvalidDependencyError
 from .inputs import RunInput
 

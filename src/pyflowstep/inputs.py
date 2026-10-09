@@ -39,7 +39,8 @@ from dataclasses import dataclass
 from inspect import Parameter, signature
 from typing import Any
 
-from .annotations import annotated_metadata, resolved_annotations
+from pyargprocessors import annotated_metadata, resolved_annotations
+
 from .exceptions import InvalidInputError, MissingInputError
 
 _REQUIRED_INPUTS = "__pyflowstep_inputs__"

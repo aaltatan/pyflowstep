@@ -5,6 +5,7 @@ from dataclasses import dataclass, replace
 from decimal import Decimal
 
 import pytest
+from pyargprocessors import ProcessArgumentError
 from pyformula import variable
 from pyspecification import object_rule
 
@@ -34,7 +35,6 @@ from examples.dependencies import (
 from pyflowstep import (
     Flow,
     FlowCompiler,
-    ParseArgumentError,
     StepDoesNotExistError,
     compose,
     get_flow_json_schema,
@@ -99,7 +99,7 @@ class TestBrowserAutomation:
             ],
         )
 
-        with pytest.raises(ParseArgumentError, match="only https urls") as info:
+        with pytest.raises(ProcessArgumentError, match="only https urls") as info:
             page_compiler.compile(json.loads(scenario))
 
         assert info.value.__notes__ == ["at $[1]"]
@@ -173,7 +173,7 @@ class TestCoffeeShop:
     def test_unknown_milk_is_rejected_when_the_menu_loads(self) -> None:
         recipe = [{"name": "brew", "args": ["drip"]}, {"name": "add_milk", "args": ["goat"]}]
 
-        with pytest.raises(ParseArgumentError, match="'goat' is not a valid Milk") as info:
+        with pytest.raises(ProcessArgumentError, match="'goat' is not a valid Milk") as info:
             coffee_compiler.compile(recipe)  # type: ignore[arg-type]
 
         assert info.value.__notes__ == ["at $[1]"]

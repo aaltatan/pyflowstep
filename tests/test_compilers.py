@@ -2,6 +2,7 @@ import json
 from typing import Annotated, Any
 
 import pytest
+from pyargprocessors import Process, ProcessArgumentError
 
 from pyflowstep import (
     Depends,
@@ -9,8 +10,6 @@ from pyflowstep import (
     FlowCompiler,
     InvalidFlowDefinitionError,
     MissingArgumentError,
-    Parse,
-    ParseArgumentError,
     PyflowstepError,
     StepDoesNotExistError,
     StepsRegistry,
@@ -33,7 +32,7 @@ def multiply(total: float, factor: float = 2) -> float:
 
 
 @calculator.step()
-def round_to(total: float, *, places: Annotated[int, Parse(int)]) -> float:
+def round_to(total: float, *, places: Annotated[int, Process(int)]) -> float:
     return round(total, places)
 
 
@@ -80,7 +79,7 @@ class TestCompile:
     def test_accepts_tuples_of_steps(self, compiler: FlowCompiler[float]) -> None:
         assert compiler.compile(({"name": "add", "args": [1]},))(1) == 2
 
-    def test_parsers_run_at_compile_time(self, compiler: FlowCompiler[float]) -> None:
+    def test_processors_run_at_compile_time(self, compiler: FlowCompiler[float]) -> None:
         flow = compiler.compile([{"name": "round_to", "kwargs": {"places": "1"}}])
         assert flow(3.14159) == 3.1
 
@@ -173,14 +172,14 @@ class TestInvalidDefinitions:
             ({"name": "add", "args": [1, 2]}, TooManyArgumentsError),
             ({"name": "add", "args": [1], "kwargs": {"extra": 1}}, UnexpectedKeywordArgumentError),
             ({"name": "round_to", "args": [2]}, TooManyArgumentsError),
-            ({"name": "round_to", "kwargs": {"places": "two"}}, ParseArgumentError),
+            ({"name": "round_to", "kwargs": {"places": "two"}}, ProcessArgumentError),
         ],
     )
     def test_argument_errors_have_the_path(
         self,
         compiler: FlowCompiler[float],
         item: Any,
-        error: type[PyflowstepError],
+        error: type[Exception],
     ) -> None:
         with pytest.raises(error) as info:
             compiler.compile([{"name": "multiply"}, {"name": "multiply"}, item])
@@ -263,7 +262,7 @@ class TestDependencies:
         self,
         setup: tuple[FlowCompiler[list[str]], list[int]],
         item: Any,
-        error: type[PyflowstepError],
+        error: type[Exception],
     ) -> None:
         compiler, _ = setup
 

@@ -3,6 +3,8 @@
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any, NotRequired, TypedDict
 
+from pyargprocessors import PyargprocessorsError
+
 from .exceptions import InvalidFlowDefinitionError, PyflowstepError, StepDoesNotExistError
 from .flow import Flow, compose
 
@@ -31,7 +33,7 @@ class FlowCompiler[T]:
     A flow definition is a list of `StepDict` objects, one per step, run in
     order. Every problem is reported while compiling, before anything runs:
     malformed dictionaries, unknown step names, bad arguments and failing
-    parsers. Each error carries a note with its JSON path, e.g. `at $[2]`.
+    processors. Each error carries a note with its JSON path, e.g. `at $[2]`.
 
     The compiler works on already-parsed data (lists and dicts), so where the
     definition comes from (a JSON file, a database, an API) is up to you.
@@ -80,7 +82,7 @@ class FlowCompiler[T]:
             step_dict = validate_step_dict(item, path)
             factory = self._find_step(step_dict["name"])
             return factory(*step_dict.get("args", []), **step_dict.get("kwargs", {}))
-        except PyflowstepError as error:
+        except (PyflowstepError, PyargprocessorsError) as error:
             error.add_note(f"at {path}")
             raise
 

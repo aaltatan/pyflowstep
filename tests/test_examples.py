@@ -1,6 +1,6 @@
 import pytest
 
-from examples import browser, coffee, dependencies, parsing
+from examples import browser, coffee, dependencies, processing
 
 
 def test_browser_example_runs(capsys: pytest.CaptureFixture[str]) -> None:
@@ -57,8 +57,8 @@ def test_dependencies_example_runs(capsys: pytest.CaptureFixture[str]) -> None:
     ]
 
 
-def test_parsing_example_runs(capsys: pytest.CaptureFixture[str]) -> None:
-    parsing.main()
+def test_processing_example_runs(capsys: pytest.CaptureFixture[str]) -> None:
+    processing.main()
 
     assert capsys.readouterr().out.splitlines() == [
         "Flow(in_category >> search >> where >> exclude >> price_between >> top)",
@@ -66,7 +66,7 @@ def test_parsing_example_runs(capsys: pytest.CaptureFixture[str]) -> None:
         "Studio Headphones (Sonic) $149.00 4.7*",
         "exclude expects: [{'type': 'string'}]",
         (
-            "ParseArgumentError: Argument 'limit' with value 'two' failed to parse, "
+            "ProcessArgumentError: Argument 'limit' with value 'two' failed to process, "
             "invalid literal for int() with base 10: 'two' (at $[1])"
         ),
     ]

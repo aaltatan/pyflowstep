@@ -2,6 +2,7 @@ from inspect import signature
 from typing import Annotated
 
 import pytest
+from pyargprocessors import InvalidProcessorError, Process
 
 from pyflowstep import (
     Depends,
@@ -10,9 +11,7 @@ from pyflowstep import (
     Input,
     InvalidDependencyError,
     InvalidInputError,
-    InvalidParserError,
     MissingInputError,
-    Parse,
     StepsRegistry,
     TooManyArgumentsError,
     UnexpectedKeywordArgumentError,
@@ -303,12 +302,12 @@ class TestInvalidDeclarations:
         with pytest.raises(InvalidInputError, match=r"`prefix: <type> = Input\(\)`"):
             step(fn)
 
-    def test_parameter_cannot_be_both_parsed_and_an_input(self) -> None:
+    def test_parameter_cannot_be_both_processed_and_an_input(self) -> None:
         def fn(
-            items: list[str], prefix: Annotated[str, Parse(str.strip)] = Input()
+            items: list[str], prefix: Annotated[str, Process(str.strip)] = Input()
         ) -> list[str]: ...
 
-        with pytest.raises(InvalidParserError, match="cannot both parse and inject"):
+        with pytest.raises(InvalidProcessorError, match="cannot both process and inject"):
             step(fn)
 
     def test_provider_cannot_take_an_input(self) -> None:

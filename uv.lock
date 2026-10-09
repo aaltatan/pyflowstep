@@ -173,9 +173,21 @@ wheels = [
 ]
 
 [[package]]
+name = "pyargprocessors"
+version = "0.1.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/dc/10/f89316776d7cfc7ebe8bac03777ab2e144d6bf22bb721f6985dbf66195e9/pyargprocessors-0.1.0.tar.gz", hash = "sha256:3cb592c67cdd07eb9eef287f93404c14b54984cbc8e58b7f0d320706bb0f5ae3", size = 21112, upload-time = "2026-10-09T08:10:30.546Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/cb/40/730fc6ddac2a19592dbf4a643280c7d8083a2b8b03078d466f6274dccf4f/pyargprocessors-0.1.0-py3-none-any.whl", hash = "sha256:b91954600ca11938680c0dac8514c413ecb2731fcb68b6d824f6fb95f69277d5", size = 17547, upload-time = "2026-10-09T08:10:28.623Z" },
+]
+
+[[package]]
 name = "pyflowstep"
 version = "0.5.0"
 source = { editable = "." }
+dependencies = [
+    { name = "pyargprocessors" },
+]
 
 [package.dev-dependencies]
 dev = [
@@ -187,6 +199,7 @@ dev = [
 ]
 
 [package.metadata]
+requires-dist = [{ name = "pyargprocessors", specifier = ">=0.1.0" }]
 
 [package.metadata.requires-dev]
 dev = [

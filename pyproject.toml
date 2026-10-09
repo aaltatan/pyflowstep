@@ -8,7 +8,9 @@ authors = [
 ]
 license = "GPL-3.0-only"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "pyargprocessors>=0.1.0",
+]
 keywords = [
     "flow",
     "pipeline",

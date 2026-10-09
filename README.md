@@ -6,15 +6,15 @@ A lightweight, typed Python library for composing functions into readable, reusa
 
 - steps are plain functions: `(subject, *args, **kwargs) -> subject`
 - flows are immutable values that compose with `>>`
-- step arguments are validated and parsed when a flow is **built**, not halfway through running it
-- raw JSON values become typed arguments with a `Parse` marker next to the parameter
+- step arguments are validated and processed when a flow is **built**, not halfway through running it
+- raw JSON values become typed arguments with a [pyargprocessors](https://github.com/aaltatan/pyargprocessors) `Process` marker next to the parameter
 - steps get external objects (a mailer, a database session) through FastAPI-style `Depends`
 - the caller hands per-run values to a flow by name: `flow(page, user=user)` fills every `user: User = Input()`
 - registry-based registration keeps steps organized and discoverable
 - flow definitions can be compiled from dictionaries or JSON
 - every registry can describe its flow language as a JSON Schema
 
-It pairs naturally with its siblings [pyspecification](https://github.com/aaltatan/pyspecification) (predicates) and [pyformula](https://github.com/aaltatan/pyformula) (formulas), and has **zero dependencies**.
+It pairs naturally with its siblings [pyspecification](https://github.com/aaltatan/pyspecification) (predicates) and [pyformula](https://github.com/aaltatan/pyformula) (formulas). Its only dependency is [pyargprocessors](https://github.com/aaltatan/pyargprocessors) (argument processing), which itself has none.
 
 ---
 
@@ -159,7 +159,7 @@ pipeline      # Flow(add >> multiply >> add)
 pipeline(1)   # 31
 ```
 
-`step` and `tap` do one thing: turn a function into a flow factory. Naming a step belongs to the [registry](#registry). Three markers can sit on a parameter: [`Parse`](#parsing-arguments) to convert the value passed for it, [`Depends`](#dependencies) to inject an object nobody passes, and [`Input`](#run-inputs) to receive a value from whoever runs the flow.
+`step` and `tap` do one thing: turn a function into a flow factory. Naming a step belongs to the [registry](#registry). Three markers can sit on a parameter: [`Process`](#processing-arguments) to convert the value passed for it, [`Depends`](#dependencies) to inject an object nobody passes, and [`Input`](#run-inputs) to receive a value from whoever runs the flow.
 
 Arguments are bound against the function signature **immediately**, so mistakes fail fast:
 
@@ -237,18 +237,18 @@ page_steps.register(lambda page: page, name="noop")  # register without a decora
 
 ---
 
-## Parsing arguments
+## Processing arguments
 
-Flows often come from JSON or a web form, where every value arrives as a string, number, boolean, list, object or null, while your steps want dates, decimals, enums, clean text or loaded data. Mark the parameter with `Parse(fn)` inside `Annotated`, and `fn` is applied to the value that is passed for it:
+Flows often come from JSON or a web form, where every value arrives as a string, number, boolean, list, object or null, while your steps want dates, decimals, enums, clean text or loaded data. Mark the parameter with the `Process(fn)` marker of [pyargprocessors](https://github.com/aaltatan/pyargprocessors) inside `Annotated`, and `fn` is applied to the value that is passed for it:
 
 ```python
 from typing import Annotated
 
-from pyflowstep import Parse
+from pyargprocessors import Process
 
 
 @page_steps.tap()
-def wait(page: Page, selector: str, timeout: Annotated[float, Parse(float)] = 5.0) -> None:
+def wait(page: Page, selector: str, timeout: Annotated[float, Process(float)] = 5.0) -> None:
     page.wait(selector, timeout)
 
 
@@ -259,17 +259,17 @@ wait("#result", "10")   # timeout is 10.0
 {"name": "wait", "args": ["#result", "10"]}
 ```
 
-The marker sits next to the parameter it changes, and it works with the plain `@step` and `@tap` decorators too; no registry is required.
+The marker sits next to the parameter it changes, and it works with the plain `@step` and `@tap` decorators too; no registry is required. `pyargprocessors` is installed together with `pyflowstep`.
 
 ### Name it once, reuse it
 
-A `type` alias gives a parsed type a name, so many steps can share it:
+A `type` alias gives a processed type a name, so many steps can share it:
 
 ```python
 from decimal import Decimal
 
-type Money = Annotated[Decimal, Parse(Decimal)]
-type Text = Annotated[str, Parse(str.strip), Parse(str.lower)]   # several parsers run left to right
+type Money = Annotated[Decimal, Process(Decimal)]
+type Text = Annotated[str, Process(str.strip), Process(str.lower)]   # several processors run left to right
 
 
 @catalog_steps.step()
@@ -277,19 +277,19 @@ def price_between(products: Catalog, low: Money, high: Money) -> Catalog: ...
 
 
 @catalog_steps.step()
-def search(products: Catalog, text: Text, min_stars: Annotated[float, Parse(float)] = 0) -> Catalog: ...
+def search(products: Catalog, text: Text, min_stars: Annotated[float, Process(float)] = 0) -> Catalog: ...
 ```
 
 ### Loading data from a value in the JSON
 
-A parser can be any function of one value, so the JSON can send a path and the step can receive what was loaded from it:
+A processor can be any function of one value, so the JSON can send a path and the step can receive what was loaded from it:
 
 ```python
 def load_names(path: str) -> frozenset[str]:
     return frozenset(Path(path).read_text().splitlines())
 
 
-type Names = Annotated[frozenset[str], Parse(load_names)]
+type Names = Annotated[frozenset[str], Process(load_names)]
 
 
 @catalog_steps.step()
@@ -305,7 +305,7 @@ The file is read **once, when the flow is built**. Every run of that flow reuses
 
 ### `*args` and `**kwargs`
 
-On `*args` the parser applies to each item, and on `**kwargs` to each value:
+On `*args` the processor applies to each item, and on `**kwargs` to each value:
 
 ```python
 @barista.step()
@@ -313,66 +313,99 @@ def top_with(drink: Drink, *toppings: Text) -> Drink: ...
 
 
 @catalog_steps.step()
-def where(products: Catalog, *, in_stock: Annotated[bool, Parse(parse_bool)] = False, **fields: Text) -> Catalog: ...
+def where(products: Catalog, *, in_stock: Annotated[bool, Process(to_bool)] = False, **fields: Text) -> Catalog: ...
 
 
 where(in_stock="yes", brand=" SONIC ")   # in_stock=True, brand="sonic"
 ```
 
-### Which values are parsed, and when
+### Lists and nulls
 
-- Only values that are **actually passed**, positionally or by keyword. Default values are never parsed.
-- Parsing runs **once per factory call**, while the flow is being built, not every time the flow runs.
-- Arguments are checked against the step's signature first, so a missing or extra argument is reported as an `ArgumentError` before any parser runs.
+A JSON list or a `null` is one value, so `Process(int)` would be applied to the whole of it. The `each` and `optional` helpers of `pyargprocessors` build the processor you need:
 
 ```python
-flow = add_syrup("  Vanilla ", "2")   # parsed here: flavor="vanilla", pumps=2
-flow(drink)                           # the step runs with the parsed values
-flow(another_drink)                   # nothing is parsed again
+from pyargprocessors import each, optional
+
+type Prices = Annotated[list[Decimal], Process(each(Decimal))]   # every item of a list
+type Limit = Annotated[int | None, Process(optional(int))]       # null is kept as None
+```
+
+### Which values are processed, and when
+
+- Only values that are **actually passed**, positionally or by keyword. Default values are never processed.
+- Processing runs **once per factory call**, while the flow is being built, not every time the flow runs.
+- Arguments are checked against the step's signature first, so a missing or extra argument is reported as an `ArgumentError` before any processor runs.
+
+```python
+flow = add_syrup("  Vanilla ", "2")   # processed here: flavor="vanilla", pumps=2
+flow(drink)                           # the step runs with the processed values
+flow(another_drink)                   # nothing is processed again
 ```
 
 ### Errors
 
-A parser that fails on a value raises `ParseArgumentError`, chained to the original exception. Inside a compiled flow it also carries the JSON path of the step, so a bad value is found before anything runs:
+A processor that fails on a value raises `ProcessArgumentError`, chained to the original exception. It has the name of the argument (`error.argument`), the value as it was passed (`error.value`) and the original exception (`error.cause`). Inside a compiled flow it also carries the JSON path of the step, so a bad value is found before anything runs:
 
 ```text
-pyflowstep.exceptions.ParseArgumentError: Argument 'limit' with value 'two' failed to parse, invalid literal for int() with base 10: 'two'
+pyargprocessors.exceptions.ProcessArgumentError: Argument 'limit' with value 'two' failed to process, invalid literal for int() with base 10: 'two'
 at $[1]
 ```
 
-A marker that cannot work raises `InvalidParserError` when the step is created:
+A marker that cannot work raises `InvalidProcessorError` when the step is created:
 
 | Problem                                              | Example                                              |
 | ---------------------------------------------------- | ---------------------------------------------------- |
-| The parser is not callable                           | `Parse("int")`                                       |
-| The marker is used as a default value                | `amount: int = Parse(int)`, write `Annotated[int, Parse(int)]` |
-| The marker is on the subject (the first parameter)   | `def step(page: Annotated[Page, Parse(...)], ...)`   |
-| One parameter has both `Parse` and `Depends`         | nothing is passed for a dependency, so there is nothing to parse |
+| The processor is not callable                        | `Process("int")`                                     |
+| The marker is used as a default value                | `amount: int = Process(int)`, write `Annotated[int, Process(int)]` |
+| The marker is on the subject (the first parameter)   | `def step(page: Annotated[Page, Process(...)], ...)` |
+| One parameter has both `Process` and `Depends` or `Input` | nothing is passed for it, so there is nothing to process |
+
+Both exceptions come from `pyargprocessors`. They are `TypeError`s and derive from `PyargprocessorsError`, **not** from `PyflowstepError`:
+
+```python
+from pyargprocessors import ProcessArgumentError
+
+try:
+    flow = compiler.compile(definition)
+except ProcessArgumentError as error:    # a value in the definition is wrong
+    ...
+except PyflowstepError as error:         # the definition itself is wrong
+    ...
+```
 
 ### In the JSON schema
 
-A parsed parameter is described by **what the JSON must send**. The schema takes it from the type hint of the parser's own parameter (`load_names(path: str)` means `string`). If the parser has no type hint, as with `int`, `Decimal` or an enum class, the schema falls back to the parameter's type.
+A processed parameter is described by **what the JSON must send**. The schema takes it from the type hint of the processor's own parameter (`load_names(path: str)` means `string`). If the processor has no type hint, as with `int`, `Decimal` or an enum class, the schema falls back to the parameter's type.
 
 | Parameter                                    | Schema                          |
 | -------------------------------------------- | ------------------------------- |
-| `names: Annotated[frozenset[str], Parse(load_names)]` | `{"type": "string"}`   |
-| `limit: Annotated[int, Parse(int)]`          | `{"type": "integer"}`           |
-| `kind: Annotated[Milk, Parse(Milk)]`         | `{"enum": ["whole", "oat", "almond"], "type": "string"}` |
+| `names: Annotated[frozenset[str], Process(load_names)]` | `{"type": "string"}`   |
+| `limit: Annotated[int, Process(int)]`        | `{"type": "integer"}`           |
+| `kind: Annotated[Milk, Process(Milk)]`       | `{"enum": ["whole", "oat", "almond"], "type": "string"}` |
 
-### Upgrading from 0.1
+### Upgrading
 
-The `processors=` option of the registry is gone. Move each entry onto its parameter:
+Argument processing moved to `pyargprocessors`, and `Parse` became its `Process`:
 
-| 0.1                                               | 0.2                                                     |
+| Before                                            | Now                                                     |
 | ------------------------------------------------- | ------------------------------------------------------- |
-| `processors={"timeout": float}`                   | `timeout: Annotated[float, Parse(float)]`               |
+| `from pyflowstep import Parse`                    | `from pyargprocessors import Process`                   |
+| `Annotated[float, Parse(float)]`                  | `Annotated[float, Process(float)]`                      |
+| `pyflowstep.ParseArgumentError`                   | `pyargprocessors.ProcessArgumentError`, no longer a `PyflowstepError` |
+| `pyflowstep.InvalidParserError`                   | `pyargprocessors.InvalidProcessorError`, no longer a `PyflowstepError` |
+| `... failed to parse, ...` in the message         | `... failed to process, ...`                            |
+
+Coming from 0.1, the `processors=` option of the registry is gone as well. Move each entry onto its parameter:
+
+| 0.1                                               | Now                                                     |
+| ------------------------------------------------- | ------------------------------------------------------- |
+| `processors={"timeout": float}`                   | `timeout: Annotated[float, Process(float)]`             |
 | `processors=normalize` (every argument)           | annotate each parameter, usually with a shared alias such as `Text` |
-| `processors={"pumps": int, ...: normalize}`       | `pumps: Annotated[int, Parse(int)]`, the others `Text`  |
+| `processors={"pumps": int, ...: normalize}`       | `pumps: Annotated[int, Process(int)]`, the others `Text` |
 | `...` covering `**kwargs`                         | `**fields: Text`                                        |
-| `ProcessArgumentError`                            | `ParseArgumentError`                                    |
 | `InvalidProcessorsError`                          | removed; a key can no longer be misspelled              |
 
-See [`examples/parsing.py`](examples/parsing.py) for every form working together on data from a web form.
+See [`examples/processing.py`](examples/processing.py) for every form working together on data from a web form.
 
 ---
 
@@ -496,10 +529,10 @@ Keys are the original providers and values the providers to call instead. Nested
 
 ### Rules
 
-- **Invisible to JSON.** A dependency is absent from the JSON schema, cannot be parsed, and passing one raises `UnexpectedKeywordArgumentError` (or `TooManyArgumentsError`) when the flow is built.
+- **Invisible to JSON.** A dependency is absent from the JSON schema, cannot be processed, and passing one raises `UnexpectedKeywordArgumentError` (or `TooManyArgumentsError`) when the flow is built.
 - **Declarations are checked early**, when the step is created, with `InvalidDependencyError`: a provider that is not callable, is circular, or has a required parameter that is not a dependency; a dependency on the subject or on a positional-only parameter; `Depends` written inside `Annotated`.
 - **Providers run late**, when the flow runs. An error inside a provider surfaces then, not at compile time.
-- A dependency is for an object the JSON must **not** choose. When the JSON should pick one by name (`"via": "email"`), use [`Parse`](#parsing-arguments) with a function that turns the name into the object.
+- A dependency is for an object the JSON must **not** choose. When the JSON should pick one by name (`"via": "email"`), use [`Process`](#processing-arguments) with a function that turns the name into the object.
 
 Using ruff? Its `B008` rule flags function calls in argument defaults. Tell it `Depends` is a marker:
 
@@ -573,7 +606,7 @@ flow(page, credentials=credentials)
 
 ### Rules
 
-- **Invisible to JSON**, like a dependency: an input is absent from the JSON schema, cannot be parsed, and passing one while building the flow raises `UnexpectedKeywordArgumentError` (or `TooManyArgumentsError`).
+- **Invisible to JSON**, like a dependency: an input is absent from the JSON schema, cannot be processed, and passing one while building the flow raises `UnexpectedKeywordArgumentError` (or `TooManyArgumentsError`).
 - **`Input(default=...)` makes the input optional**: with `note: str = Input(default="")`, `""` is used when the caller passes no `note`. Optional inputs are not listed in `flow.inputs`.
 - **Extra inputs are ignored**, so one caller can run different flows, each using the inputs it needs.
 - **Nested flows see the inputs of the run they join.** A flow called from inside a step can be given inputs of its own, `inner(page, voucher=other)`; they are laid over the outer ones for that call only.
@@ -599,7 +632,7 @@ extend-immutable-calls = ["pyflowstep.Depends", "pyflowstep.Input"]
 
 | The object…                                                  | Use                                   |
 | ------------------------------------------------------------ | ------------------------------------- |
-| is written in the flow definition (a selector, a limit)      | a plain argument, with `Parse` if needed |
+| is written in the flow definition (a selector, a limit)      | a plain argument, with `Process` if needed |
 | can be built by a function, the same way for every caller (a mailer, a session) | `Depends(provider)`     |
 | is only known to whoever runs the flow (a user, a record, credentials) | `Input()`                   |
 
@@ -643,7 +676,7 @@ Each step dictionary has this shape — only `name` is required:
 Everything is validated while compiling, before any step runs. Errors carry a note with their JSON path:
 
 ```text
-pyflowstep.exceptions.ParseArgumentError: Argument 'url' with value 'http://insecure.example.com' failed to parse, only https urls are allowed
+pyargprocessors.exceptions.ProcessArgumentError: Argument 'url' with value 'http://insecure.example.com' failed to process, only https urls are allowed
 at $[1]
 ```
 
@@ -652,7 +685,7 @@ at $[1]
 | Not a list / malformed step dict                 | `InvalidFlowDefinitionError`                           |
 | Unknown or hidden step name                      | `StepDoesNotExistError` (lists the available steps)    |
 | Missing / extra / duplicated arguments           | `MissingArgumentError`, `TooManyArgumentsError`, ...   |
-| A parser rejects a value                         | `ParseArgumentError`                                   |
+| A processor rejects a value                      | `ProcessArgumentError` (from `pyargprocessors`)        |
 
 A compiled flow is an ordinary `Flow`, so it composes with Python steps: `login >> click("#profile")`.
 
@@ -707,7 +740,7 @@ Supported annotations: `str`, `int`, `float`, `bool`, `None`, `Decimal`, `dateti
 
 Runnable examples live in [`examples/`](examples):
 
-- [`examples/browser.py`](examples/browser.py) — the `Page` automation above: `tap` steps, an https-only parser, reusable sub-flows and a JSON login scenario.
+- [`examples/browser.py`](examples/browser.py) — the `Page` automation above: `tap` steps, an https-only processor, reusable sub-flows and a JSON login scenario.
 
   ```bash
   uv run python -m examples.browser
@@ -724,18 +757,18 @@ Runnable examples live in [`examples/`](examples):
   # 'L espresso, 1 shot(s), 200ml whole milk, 1x vanilla syrup -> $3.65'
   ```
 
-- [`examples/parsing.py`](examples/parsing.py) — every way to use `Parse`, side by side. Shop filters arrive from a web form as raw strings (`"4"`, `"yes"`, `" SONIC "`, a file path) and are turned into typed, clean arguments, including a set of names loaded from that path:
+- [`examples/processing.py`](examples/processing.py) — every way to use `Process`, side by side. Shop filters arrive from a web form as raw strings (`"4"`, `"yes"`, `" SONIC "`, a file path) and are turned into typed, clean arguments, including a set of names loaded from that path:
 
   ```bash
-  uv run python -m examples.parsing
+  uv run python -m examples.processing
   ```
 
   ```python
-  type Text = Annotated[str, Parse(str.strip), Parse(str.lower)]
-  type Names = Annotated[frozenset[str], Parse(load_names)]
+  type Text = Annotated[str, Process(str.strip), Process(str.lower)]
+  type Names = Annotated[frozenset[str], Process(load_names)]
 
   @catalog_steps.step()
-  def where(products: Catalog, *, in_stock: Annotated[bool, Parse(parse_bool)] = False, **fields: Text) -> Catalog: ...
+  def where(products: Catalog, *, in_stock: Annotated[bool, Process(to_bool)] = False, **fields: Text) -> Catalog: ...
 
   @catalog_steps.step()
   def exclude(products: Catalog, names: Names) -> Catalog: ...
@@ -808,7 +841,7 @@ checkout = note_if(is_large(Decimal(100)), "needs approval") >> apply_tax(round(
 | `compose(*actions)`                                          | function  | Combine actions and flows into one flat flow                    |
 | `step` / `tap`                                               | decorator | Turn a function into a step factory                             |
 | `StepsRegistry[T]`                                           | class     | Named collection of steps                                       |
-| `Parse(fn)`                                                  | marker    | Apply `fn` to the value passed for a parameter, see [Parsing arguments](#parsing-arguments) |
+| `pyargprocessors.Process(fn)`                                | marker    | Apply `fn` to the value passed for a parameter, see [Processing arguments](#processing-arguments) |
 | `Depends(provider)`                                          | marker    | Inject a parameter by calling `provider`, see [Dependencies](#dependencies) |
 | `override_dependencies(mapping)`                             | context manager | Replace providers inside a `with` block, for tests        |
 | `Input(default=...)`                                         | marker    | Receive a parameter from the caller of the flow, `flow(subject, name=value)`, see [Run inputs](#run-inputs) |
@@ -819,7 +852,7 @@ checkout = note_if(is_large(Decimal(100)), "needs approval") >> apply_tax(round(
 | `get_step_json_schema(name, step)`                           | function  | JSON Schema of one step dictionary                              |
 | `get_flow_json_schema(steps)`                                | function  | JSON Schema of a whole flow definition                          |
 
-All exceptions derive from `PyflowstepError`; argument errors, `InvalidParserError`, `InvalidDependencyError`, `InvalidInputError` and `MissingInputError` also derive from `TypeError`, definition errors from `ValueError`, and `StepDoesNotExistError` from `LookupError`.
+All exceptions derive from `PyflowstepError`; argument errors, `InvalidDependencyError`, `InvalidInputError` and `MissingInputError` also derive from `TypeError`, definition errors from `ValueError`, and `StepDoesNotExistError` from `LookupError`. The exceptions of argument processing, `ProcessArgumentError` and `InvalidProcessorError`, belong to `pyargprocessors`: they are `TypeError`s too, but derive from `PyargprocessorsError`.
 
 ---
 

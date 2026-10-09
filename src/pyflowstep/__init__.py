@@ -19,6 +19,20 @@ functions and compose them with `>>`:
 
 Steps collected in a `StepsRegistry` can also be described as JSON
 (`get_flow_json_schema`) and compiled from JSON (`FlowCompiler`).
+
+Raw JSON values become typed arguments with the `Process` marker of
+`pyargprocessors`, written next to the parameter:
+
+```python
+>>> from typing import Annotated
+>>> from pyargprocessors import Process
+>>> @step
+... def scale(total: int, factor: Annotated[int, Process(int)]) -> int:
+...     return total * factor
+>>> scale("3")(2)
+6
+
+```
 """
 
 from .compilers import FlowCompiler, FlowDefinition, StepDict, validate_step_dict
@@ -28,13 +42,11 @@ from .exceptions import (
     InvalidDependencyError,
     InvalidFlowDefinitionError,
     InvalidInputError,
-    InvalidParserError,
     InvalidStepError,
     InvalidStepNameError,
     MissingArgumentError,
     MissingInputError,
     MultipleValuesArgumentError,
-    ParseArgumentError,
     PositionalOnlyArgumentError,
     PyflowstepError,
     StepAlreadyRegisteredError,
@@ -45,7 +57,6 @@ from .exceptions import (
 from .flow import Action, Flow, compose
 from .inputs import Input
 from .json_schema import get_flow_json_schema, get_json_schema, get_step_json_schema
-from .parsers import Parse
 from .registry import StepsRegistry
 from .steps import StepFactory, StepFn, TapFn, step, tap
 
@@ -60,14 +71,11 @@ __all__ = [
     "InvalidDependencyError",
     "InvalidFlowDefinitionError",
     "InvalidInputError",
-    "InvalidParserError",
     "InvalidStepError",
     "InvalidStepNameError",
     "MissingArgumentError",
     "MissingInputError",
     "MultipleValuesArgumentError",
-    "Parse",
-    "ParseArgumentError",
     "PositionalOnlyArgumentError",
     "PyflowstepError",
     "StepAlreadyRegisteredError",
