@@ -45,16 +45,16 @@ class InvalidDependencyError(PyflowstepError, TypeError):
     """Raised when a `Depends(...)` declaration cannot work.
 
     For example a provider that is not callable, is circular, or has a required
-    parameter that is not itself a dependency.
+    parameter that is not itself a dependency, or a marker written inside
+    `Annotated` instead of as the default value.
     """
 
 
 class InvalidInputError(PyflowstepError, TypeError):
     """Raised when an `Input()` declaration cannot work.
 
-    For example an input on the subject, on a positional-only parameter, on a
-    parameter that is also a dependency, or written inside `Annotated` instead
-    of as the default value.
+    For example an input on the subject, on a positional-only parameter, or
+    written inside `Annotated` instead of as the default value.
     """
 
 

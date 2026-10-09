@@ -27,7 +27,7 @@ from inspect import BoundArguments, Parameter, Signature, signature
 from typing import Any, Concatenate
 
 from .dependencies import Dependency, resolve_dependencies, run_scope, step_dependencies
-from .exceptions import InvalidInputError, InvalidParserError, InvalidStepError, to_argument_error
+from .exceptions import InvalidParserError, InvalidStepError, to_argument_error
 from .flow import Flow, action_name
 from .inputs import RunInput, mark_required_inputs, resolve_inputs, step_inputs
 from .parsers import find_parsers, parse_arguments
@@ -129,10 +129,6 @@ def _make_step[T, **P](fn: TapFn[T, P], *, passthrough: bool) -> StepFactory[T, 
     inputs = step_inputs(fn, step_name)
     parsers = find_parsers(fn, step_name)
     injected = dependencies.keys() | inputs.keys()
-
-    if both := sorted(dependencies.keys() & inputs.keys()):
-        msg = f"Step '{step_name}' cannot take {both} both as a dependency and as a run input"
-        raise InvalidInputError(msg)
 
     if both := sorted(parsers.keys() & injected):
         msg = f"Step '{step_name}' cannot both parse and inject {both}: nothing is passed for them"

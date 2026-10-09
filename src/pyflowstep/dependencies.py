@@ -39,8 +39,6 @@ from .inputs import RunInput
 
 type Provider = Callable[..., Any]
 
-_UNSUPPORTED_KINDS = (Parameter.POSITIONAL_ONLY, Parameter.VAR_POSITIONAL, Parameter.VAR_KEYWORD)
-
 
 @dataclass(frozen=True, slots=True)
 class Dependency:
@@ -52,13 +50,16 @@ class Dependency:
 def Depends(provider: Provider, /) -> Any:  # noqa: N802
     """Mark a step (or provider) parameter as injected by calling `provider`.
 
-    Use it as a default value, or inside `Annotated` to name a dependency once
-    and reuse it:
+    Use it as the default value of the parameter. To name a dependency once and
+    reuse it, keep the marker in a constant:
 
         def send(order: Order, mailer: Mailer = Depends(get_mailer)) -> Order: ...
 
-        type MailerDep = Annotated[Mailer, Depends(get_mailer)]
-        def send(order: Order, mailer: MailerDep) -> Order: ...
+        MAILER = Depends(get_mailer)
+        def send(order: Order, mailer: Mailer = MAILER) -> Order: ...
+
+    It is never written inside `Annotated`: only a default value lets type
+    checkers see that the parameter is not passed, so `send()` type-checks.
 
     A provider is a function returning the object, or a generator function
     that yields it once and cleans up after the `yield`. Its own parameters may
@@ -90,15 +91,14 @@ def Depends(provider: Provider, /) -> Any:  # noqa: N802
 
 
 def find_dependencies(fn: Callable[..., Any]) -> dict[str, Dependency]:
-    """Return the parameters of `fn` marked with `Depends`, by name.
+    """Return the parameters of `fn` whose default is `Depends(...)`, by name.
 
     Example:
     ```python
     >>> def get_rate() -> float:
     ...     return 0.25
-    >>> from typing import Annotated
-    >>> type Rate = Annotated[float, Depends(get_rate)]
-    >>> def add_tax(price: float, label: str, rate: Rate, extra: float = Depends(get_rate)): ...
+    >>> RATE = Depends(get_rate)
+    >>> def add_tax(price: float, rate: float = RATE, extra: float = Depends(get_rate)): ...
     >>> list(find_dependencies(add_tax))
     ['rate', 'extra']
 
@@ -110,22 +110,24 @@ def find_dependencies(fn: Callable[..., Any]) -> dict[str, Dependency]:
     except ValueError:  # builtins without a signature take no dependencies
         return {}
 
-    annotations = resolved_annotations(fn)
-    markers = (
-        (name, _marker(parameter, annotations.get(name))) for name, parameter in parameters.items()
-    )
-    return {name: marker for name, marker in markers if marker is not None}
+    return {
+        name: parameter.default
+        for name, parameter in parameters.items()
+        if isinstance(parameter.default, Dependency)
+    }
 
 
 def step_dependencies(fn: Callable[..., Any], step_name: str) -> dict[str, Dependency]:
     """Return the dependencies of a step function after validating them.
 
     Raises:
-        InvalidDependencyError: If the subject is marked, a dependency sits on a
-            positional-only, `*args` or `**kwargs` parameter, or a provider is
+        InvalidDependencyError: If `Depends` is written inside `Annotated`, the
+            subject or a positional-only parameter is marked, or a provider is
             circular or has a required parameter that is not a dependency.
 
     """
+    _reject_annotated_markers(fn, f"Step '{step_name}'")
+
     dependencies = find_dependencies(fn)
     parameters = signature(fn).parameters
     subject = next(iter(parameters))
@@ -135,11 +137,8 @@ def step_dependencies(fn: Callable[..., Any], step_name: str) -> dict[str, Depen
         raise InvalidDependencyError(msg)
 
     for name, dependency in dependencies.items():
-        if parameters[name].kind in _UNSUPPORTED_KINDS:
-            msg = (
-                f"Step '{step_name}' cannot inject {parameters[name].kind.description} "
-                f"parameter '{name}'"
-            )
+        if parameters[name].kind is Parameter.POSITIONAL_ONLY:
+            msg = f"Step '{step_name}' cannot inject positional-only parameter '{name}'"
             raise InvalidDependencyError(msg)
         _validate_provider(dependency.provider, ())
 
@@ -269,14 +268,17 @@ def _provider_dependencies(provider: Provider) -> Mapping[str, Dependency]:
     return MappingProxyType(find_dependencies(provider))
 
 
-def _marker(parameter: Parameter, annotation: Any) -> Dependency | None:
-    if isinstance(parameter.default, Dependency):
-        return parameter.default
-
-    return next(
-        (item for item in annotated_metadata(annotation) if isinstance(item, Dependency)),
-        None,
-    )
+def _reject_annotated_markers(fn: Callable[..., Any], owner: str) -> None:
+    """Raise if a parameter of `fn` carries `Depends` inside `Annotated`."""
+    for name, annotation in resolved_annotations(fn).items():
+        for item in annotated_metadata(annotation):
+            if isinstance(item, Dependency):
+                msg = (
+                    f"{owner} uses Depends inside Annotated for '{name}'; write it as the "
+                    f"default value, `{name}: <type> = Depends({_name(item.provider)})`, so type "
+                    "checkers see the parameter as optional"
+                )
+                raise InvalidDependencyError(msg)
 
 
 def _validate_provider(provider: Provider, path: tuple[Provider, ...]) -> None:
@@ -290,6 +292,7 @@ def _validate_provider(provider: Provider, path: tuple[Provider, ...]) -> None:
     except ValueError:  # builtins without a signature are called with no arguments
         return
 
+    _reject_annotated_markers(provider, f"Provider '{_name(provider)}'")
     dependencies = find_dependencies(provider)
 
     for name, parameter in parameters.items():
@@ -300,11 +303,8 @@ def _validate_provider(provider: Provider, path: tuple[Provider, ...]) -> None:
             )
             raise InvalidDependencyError(msg)
 
-        if name in dependencies and parameter.kind in _UNSUPPORTED_KINDS:
-            msg = (
-                f"Provider '{_name(provider)}' cannot inject {parameter.kind.description} "
-                f"parameter '{name}'"
-            )
+        if name in dependencies and parameter.kind is Parameter.POSITIONAL_ONLY:
+            msg = f"Provider '{_name(provider)}' cannot inject positional-only parameter '{name}'"
             raise InvalidDependencyError(msg)
 
         if name in dependencies:

@@ -404,23 +404,23 @@ send_email("receipt")   # only `template` is an argument
 
 It works the same with the plain `@step` and `@tap` decorators; no registry is required.
 
-### Two ways to write it
+### Always the default value
+
+`Depends(...)` is written as the default value of the parameter, in steps and in providers. To name a dependency once and reuse it in many steps, keep the marker in a constant:
 
 ```python
-from typing import Annotated
-
-# default value: quick, for a one-off
+# inline: quick, for a one-off
 def send_email(order: Order, template: str, mailer: Mailer = Depends(get_mailer)) -> None: ...
 
 
-# Annotated: name the dependency once, reuse it in many steps
-type MailerDep = Annotated[Mailer, Depends(get_mailer)]
+# a constant: name the dependency once, reuse it
+MAILER = Depends(get_mailer)
 
-def send_email(order: Order, template: str, mailer: MailerDep) -> None: ...
-def send_invoice(order: Order, mailer: MailerDep) -> None: ...
+def send_email(order: Order, template: str, mailer: Mailer = MAILER) -> None: ...
+def send_invoice(order: Order, mailer: Mailer = MAILER) -> None: ...
 ```
 
-Both forms behave the same when the flow runs. Type checkers differ: with the `Annotated` form they still see `mailer` as a required argument and report `send_email("receipt")` as missing it. Use the default-value form for steps you call from Python; the `Annotated` form suits steps that are only used from JSON.
+It is never written inside `Annotated`. Only a default value tells a type checker that the parameter is not passed, so `send_email("receipt")` type-checks; `Annotated[Mailer, Depends(get_mailer)]` raises `InvalidDependencyError` when the step is created.
 
 ### One object per flow run
 
@@ -445,16 +445,16 @@ def get_session() -> Iterator[Session]:
         session.close()
 
 
-type SessionDep = Annotated[Session, Depends(get_session)]
+SESSION = Depends(get_session)
 
 
 @steps.tap()
-def save(order: Order, session: SessionDep) -> None:
+def save(order: Order, session: Session = SESSION) -> None:
     session.add(order)
 
 
 @steps.tap()
-def audit(order: Order, action: str, session: SessionDep) -> None:
+def audit(order: Order, action: str, session: Session = SESSION) -> None:
     session.add(AuditRow(order.id, action))   # the same session `save` used
 
 
@@ -497,7 +497,7 @@ Keys are the original providers and values the providers to call instead. Nested
 ### Rules
 
 - **Invisible to JSON.** A dependency is absent from the JSON schema, cannot be parsed, and passing one raises `UnexpectedKeywordArgumentError` (or `TooManyArgumentsError`) when the flow is built.
-- **Declarations are checked early**, when the step is created, with `InvalidDependencyError`: a provider that is not callable, is circular, or has a required parameter that is not a dependency; a dependency on the subject, or on a positional-only, `*args` or `**kwargs` parameter.
+- **Declarations are checked early**, when the step is created, with `InvalidDependencyError`: a provider that is not callable, is circular, or has a required parameter that is not a dependency; a dependency on the subject or on a positional-only parameter; `Depends` written inside `Annotated`.
 - **Providers run late**, when the flow runs. An error inside a provider surfaces then, not at compile time.
 - A dependency is for an object the JSON must **not** choose. When the JSON should pick one by name (`"via": "email"`), use [`Parse`](#parsing-arguments) with a function that turns the name into the object.
 
@@ -509,6 +509,16 @@ extend-immutable-calls = ["pyflowstep.Depends"]
 ```
 
 See [`examples/dependencies.py`](examples/dependencies.py) for a complete flow with a mailer, a per-run session and a test override.
+
+### Upgrading from 0.4
+
+`Annotated[T, Depends(provider)]` is gone, for the same reason `Input[T]` went in 0.4: a type checker reported `send_email("receipt")` as missing its `mailer` argument. Move the marker to the default value, in steps and in providers:
+
+| 0.4                                                       | 0.5                                          |
+| --------------------------------------------------------- | -------------------------------------------- |
+| `mailer: Annotated[Mailer, Depends(get_mailer)]`          | `mailer: Mailer = Depends(get_mailer)`       |
+| `type MailerDep = Annotated[Mailer, Depends(get_mailer)]` | `MAILER = Depends(get_mailer)`               |
+| `mailer: MailerDep`                                       | `mailer: Mailer = MAILER`                    |
 
 ---
 
@@ -567,7 +577,7 @@ flow(page, credentials=credentials)
 - **`Input(default=...)` makes the input optional**: with `note: str = Input(default="")`, `""` is used when the caller passes no `note`. Optional inputs are not listed in `flow.inputs`.
 - **Extra inputs are ignored**, so one caller can run different flows, each using the inputs it needs.
 - **Nested flows see the inputs of the run they join.** A flow called from inside a step can be given inputs of its own, `inner(page, voucher=other)`; they are laid over the outer ones for that call only.
-- **Declarations are checked early**, when the step is created, with `InvalidInputError`: an input on the subject, on a positional-only parameter, on a parameter that is also a dependency, or written inside `Annotated`. A provider cannot take an input.
+- **Declarations are checked early**, when the step is created, with `InvalidInputError`: an input on the subject, on a positional-only parameter, or written inside `Annotated`. A provider cannot take an input.
 
 Using ruff? Add `Input` next to `Depends` for its `B008` rule:
 
@@ -742,7 +752,7 @@ Runnable examples live in [`examples/`](examples):
   def send_email(order: Order, template: str, mailer: Mailer = Depends(get_mailer)) -> None: ...
 
   @fulfilment_steps.tap()
-  def save(order: Order, session: SessionDep) -> None: ...
+  def save(order: Order, session: Session = SESSION) -> None: ...
   ```
 
 ### Working with pyspecification and pyformula

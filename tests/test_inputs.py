@@ -303,14 +303,6 @@ class TestInvalidDeclarations:
         with pytest.raises(InvalidInputError, match=r"`prefix: <type> = Input\(\)`"):
             step(fn)
 
-    def test_parameter_cannot_be_both_a_dependency_and_an_input(self) -> None:
-        def fn(
-            items: list[str], prefix: Annotated[str, Depends(lambda: ">")] = Input()
-        ) -> list[str]: ...
-
-        with pytest.raises(InvalidInputError, match="both as a dependency and as a run input"):
-            step(fn)
-
     def test_parameter_cannot_be_both_parsed_and_an_input(self) -> None:
         def fn(
             items: list[str], prefix: Annotated[str, Parse(str.strip)] = Input()

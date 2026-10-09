@@ -1,6 +1,6 @@
 [project]
 name = "pyflowstep"
-version = "0.4.0"
+version = "0.5.0"
 description = "A lightweight, typed Python library for composing functions into readable, reusable flows that can be defined as JSON."
 readme = "README.md"
 authors = [

@@ -227,7 +227,7 @@ class TestDependenciesAreHidden:
             number: int,
             size: int = Depends(get_page_size),
             *,
-            limit: Annotated[int, Depends(get_page_size)],
+            limit: int = Depends(get_page_size),
             order: str = "asc",
         ) -> object:
             return page
