@@ -12,7 +12,9 @@ from decimal import Decimal
 from enum import StrEnum
 from typing import Annotated, Literal
 
-from pyflowstep import Flow, FlowCompiler, Parse, StepsRegistry, compose
+from pyargprocessors import Process
+
+from pyflowstep import Flow, FlowCompiler, StepsRegistry, compose
 
 type Base = Literal["espresso", "drip", "cold_brew"]
 type Size = Literal["S", "M", "L"]
@@ -66,31 +68,31 @@ MILK_PRICES: dict[Milk, Decimal] = {
 
 
 def normalize_text(text: str) -> str:
-    """Parser: trim and lowercase, so " Vanilla " and "vanilla" are the same."""
+    """Processor: trim and lowercase, so " Vanilla " and "vanilla" are the same."""
     return text.strip().lower()
 
 
-type Text = Annotated[str, Parse(normalize_text)]
+type Text = Annotated[str, Process(normalize_text)]
 
 
 barista = StepsRegistry[Drink]()
 
 
 @barista.step()
-def brew(drink: Drink, base: Annotated[Base, Parse(normalize_text)], shots: int = 1) -> Drink:
+def brew(drink: Drink, base: Annotated[Base, Process(normalize_text)], shots: int = 1) -> Drink:
     """Brew the base of the drink."""
     price = BASE_PRICES[base] + EXTRA_SHOT_PRICE * (shots - 1)
     return replace(drink, base=base, shots=shots, price=drink.price + price)
 
 
 @barista.step()
-def add_milk(drink: Drink, kind: Annotated[Milk, Parse(Milk)], ml: int = 150) -> Drink:
+def add_milk(drink: Drink, kind: Annotated[Milk, Process(Milk)], ml: int = 150) -> Drink:
     """Add steamed milk."""
     return replace(drink, milk=kind, milk_ml=ml, price=drink.price + MILK_PRICES[kind])
 
 
 @barista.step()
-def add_syrup(drink: Drink, flavor: Text, pumps: Annotated[int, Parse(int)] = 1) -> Drink:
+def add_syrup(drink: Drink, flavor: Text, pumps: Annotated[int, Process(int)] = 1) -> Drink:
     """Add pumps of a flavored syrup."""
     return replace(
         drink,
@@ -106,13 +108,13 @@ def top_with(drink: Drink, *toppings: Text) -> Drink:
 
 
 @barista.step()
-def size(drink: Drink, cup: Annotated[Size, Parse(str.upper)]) -> Drink:
+def size(drink: Drink, cup: Annotated[Size, Process(str.upper)]) -> Drink:
     """Choose the cup size, adjusting the price."""
     return replace(drink, size=cup, price=drink.price + SIZE_SURCHARGES[cup])
 
 
 @barista.step(hidden=True)
-def discount(drink: Drink, percent: Annotated[Decimal, Parse(Decimal)]) -> Drink:
+def discount(drink: Drink, percent: Annotated[Decimal, Process(Decimal)]) -> Drink:
     """Staff-only: never exposed to the JSON menu."""
     factor = 1 - percent / 100
     return replace(drink, price=(drink.price * factor).quantize(Decimal("0.01")))

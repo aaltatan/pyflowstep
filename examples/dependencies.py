@@ -4,8 +4,8 @@ A shop stores its order-fulfilment flow as JSON. Some steps need a mailer and a
 database session, and neither can be written in JSON. Each step declares what it
 needs with `Depends(provider)`, and the provider is called when the flow runs:
 
-    mailer: Mailer = Depends(get_mailer)     default-value form
-    session: SessionDep                      Annotated form, named once and reused
+    mailer: Mailer = Depends(get_mailer)     the marker is the default value
+    session: Session = SESSION               the same marker, named once and reused
 
 One flow run is one scope, like one request in a web framework:
 
@@ -21,10 +21,11 @@ from dataclasses import dataclass, field, replace
 from decimal import Decimal
 from typing import Annotated
 
+from pyargprocessors import Process
+
 from pyflowstep import (
     Depends,
     FlowCompiler,
-    Parse,
     StepsRegistry,
     UnexpectedKeywordArgumentError,
     get_step_json_schema,
@@ -98,7 +99,7 @@ def get_session() -> Iterator[Session]:
         print("  session closed")
 
 
-type SessionDep = Annotated[Session, Depends(get_session)]
+SESSION = Depends(get_session)
 
 
 # --- steps -------------------------------------------------------------------
@@ -107,13 +108,13 @@ fulfilment_steps = StepsRegistry[Order]()
 
 
 @fulfilment_steps.step()
-def discount(order: Order, percent: Annotated[Decimal, Parse(Decimal)]) -> Order:
+def discount(order: Order, percent: Annotated[Decimal, Process(Decimal)]) -> Order:
     """Apply a discount: an ordinary step, `percent` comes from the JSON."""
     return replace(order, total=order.total * (1 - percent / 100))
 
 
 @fulfilment_steps.tap()
-def save(order: Order, session: SessionDep) -> None:
+def save(order: Order, session: Session = SESSION) -> None:
     """Store the order. The session is injected, the JSON knows nothing about it."""
     session.add(f"order {order.id}")
 
@@ -134,7 +135,7 @@ def send_email(order: Order, template: str, mailer: Mailer = Depends(get_mailer)
 
 
 @fulfilment_steps.tap()
-def audit(order: Order, action: str, session: SessionDep) -> None:
+def audit(order: Order, action: str, session: Session = SESSION) -> None:
     """Record what happened, in the same session `save` used."""
     session.add(f"audit {order.id} {action}")
 

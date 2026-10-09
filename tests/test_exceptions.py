@@ -1,15 +1,14 @@
 import pytest
+from pyargprocessors import InvalidProcessorError, ProcessArgumentError
 
 from pyflowstep import (
     ArgumentError,
     InvalidDependencyError,
     InvalidFlowDefinitionError,
-    InvalidParserError,
     InvalidStepError,
     InvalidStepNameError,
     MissingArgumentError,
     MultipleValuesArgumentError,
-    ParseArgumentError,
     PositionalOnlyArgumentError,
     PyflowstepError,
     StepAlreadyRegisteredError,
@@ -29,7 +28,6 @@ class TestHierarchy:
             StepDoesNotExistError,
             InvalidStepError,
             InvalidDependencyError,
-            InvalidParserError,
             InvalidStepNameError,
             InvalidFlowDefinitionError,
             ArgumentError,
@@ -46,12 +44,16 @@ class TestHierarchy:
             UnexpectedKeywordArgumentError,
             MultipleValuesArgumentError,
             PositionalOnlyArgumentError,
-            ParseArgumentError,
         ],
     )
     def test_argument_errors(self, error: type[Exception]) -> None:
         assert issubclass(error, ArgumentError)
         assert issubclass(error, TypeError)
+
+    @pytest.mark.parametrize("error", [InvalidProcessorError, ProcessArgumentError])
+    def test_processing_errors_belong_to_pyargprocessors(self, error: type[Exception]) -> None:
+        assert issubclass(error, TypeError)
+        assert not issubclass(error, PyflowstepError)
 
     def test_builtin_compatibility(self) -> None:
         assert issubclass(StepDoesNotExistError, LookupError)

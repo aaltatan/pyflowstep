@@ -9,7 +9,9 @@ Run it with `uv run python -m examples.browser`.
 import json
 from typing import Annotated, Any
 
-from pyflowstep import FlowCompiler, Parse, StepsRegistry, compose, get_flow_json_schema
+from pyargprocessors import Process
+
+from pyflowstep import FlowCompiler, StepsRegistry, compose, get_flow_json_schema
 
 
 class Page:
@@ -36,7 +38,7 @@ class Page:
 
 
 def https_only(url: str) -> str:
-    """Parser: reject insecure urls before the flow ever runs."""
+    """Processor: reject insecure urls before the flow ever runs."""
     if not url.startswith("https://"):
         msg = f"only https urls are allowed, got {url!r}"
         raise ValueError(msg)
@@ -47,7 +49,7 @@ page_steps = StepsRegistry[Page]()
 
 
 @page_steps.tap()
-def navigate(page: Page, url: Annotated[str, Parse(https_only)]) -> None:
+def navigate(page: Page, url: Annotated[str, Process(https_only)]) -> None:
     """Open a url in the page."""
     page.navigate(url)
 
@@ -65,7 +67,7 @@ def fill(page: Page, selector: str, value: str | int) -> None:
 
 
 @page_steps.tap()
-def wait(page: Page, selector: str, timeout: Annotated[float, Parse(float)] = 5.0) -> None:
+def wait(page: Page, selector: str, timeout: Annotated[float, Process(float)] = 5.0) -> None:
     """Wait until an element matching a CSS selector appears."""
     page.wait(selector, timeout)
 

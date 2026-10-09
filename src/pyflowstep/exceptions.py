@@ -4,6 +4,10 @@ Every exception derives from `PyflowstepError`, so callers can catch the whole
 family at once. Argument errors additionally derive from `TypeError`, and
 definition errors from `ValueError`, to stay compatible with code that expects
 the built-in exception types.
+
+Argument processing belongs to `pyargprocessors`, which raises its own
+`ProcessArgumentError` and `InvalidProcessorError`. Both are `TypeError`s, and
+derive from `PyargprocessorsError` instead of `PyflowstepError`.
 """
 
 import re
@@ -45,29 +49,21 @@ class InvalidDependencyError(PyflowstepError, TypeError):
     """Raised when a `Depends(...)` declaration cannot work.
 
     For example a provider that is not callable, is circular, or has a required
-    parameter that is not itself a dependency.
+    parameter that is not itself a dependency, or a marker written inside
+    `Annotated` instead of as the default value.
     """
 
 
 class InvalidInputError(PyflowstepError, TypeError):
     """Raised when an `Input()` declaration cannot work.
 
-    For example an input on the subject, on a positional-only parameter, on a
-    parameter that is also a dependency, or written inside `Annotated` instead
-    of as the default value.
+    For example an input on the subject, on a positional-only parameter, or
+    written inside `Annotated` instead of as the default value.
     """
 
 
 class MissingInputError(PyflowstepError, TypeError):
     """Raised when a flow runs without an input one of its steps requires."""
-
-
-class InvalidParserError(PyflowstepError, TypeError):
-    """Raised when a `Parse(...)` marker cannot work.
-
-    For example a parser that is not callable, a marker on the subject, or a
-    marker used as a default value instead of inside `Annotated`.
-    """
 
 
 class InvalidStepNameError(PyflowstepError, ValueError):
@@ -100,10 +96,6 @@ class MultipleValuesArgumentError(ArgumentError):
 
 class PositionalOnlyArgumentError(ArgumentError):
     """Raised when a positional-only step argument is passed as a keyword."""
-
-
-class ParseArgumentError(ArgumentError):
-    """Raised when a `Parse` function fails on the value given for a step argument."""
 
 
 _ARGUMENT_ERROR_PATTERNS: tuple[tuple[str, type[ArgumentError]], ...] = (

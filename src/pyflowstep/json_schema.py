@@ -24,8 +24,7 @@ from typing import (
 )
 from uuid import UUID
 
-from .annotations import annotated_metadata, resolved_annotations
-from .parsers import Parse, input_annotation
+from pyargprocessors import Process, annotated_metadata, input_annotation, resolved_annotations
 
 JSON_SCHEMA_DIALECT = "https://json-schema.org/draft/2020-12/schema"
 
@@ -53,7 +52,7 @@ def get_json_schema(annotation: Any) -> dict[str, Any]:
     """Return the JSON Schema of a Python type annotation.
 
     Unknown or unannotated types map to `{}`, which accepts any value. A type
-    marked with `Parse(fn)` is described by what `fn` accepts, because that is
+    marked with `Process(fn)` is described by what `fn` accepts, because that is
     what the JSON has to send.
 
     Example:
@@ -239,10 +238,10 @@ def _typeddict_schema(annotation: Any) -> dict[str, Any]:
 
 def _sent_annotation(annotation: Any) -> Any:
     """Return the type the JSON must send for an `Annotated`/`Required`/`NotRequired` type."""
-    parser = next(
-        (item for item in annotated_metadata(annotation) if isinstance(item, Parse)), None
+    processor = next(
+        (item for item in annotated_metadata(annotation) if isinstance(item, Process)), None
     )
-    sent = input_annotation(parser) if parser else None
+    sent = input_annotation(processor) if processor else None
     return get_args(annotation)[0] if sent is None else sent
 
 

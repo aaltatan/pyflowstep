@@ -11,8 +11,8 @@ remaining arguments returns a single-step `Flow`, ready to be composed.
 
 Three markers can sit on a parameter:
 
-- `Annotated[T, Parse(fn)]` applies `fn` to the argument when the step is built,
-  see `pyflowstep.parsers`.
+- `Annotated[T, Process(fn)]` applies `fn` to the argument when the step is built,
+  see `pyargprocessors`.
 - `Depends(provider)` makes it no argument at all: it is injected when the flow
   runs, see `pyflowstep.dependencies`.
 - `Input()` as the default makes it no argument either: the caller supplies it
@@ -26,11 +26,12 @@ from functools import wraps
 from inspect import BoundArguments, Parameter, Signature, signature
 from typing import Any, Concatenate
 
+from pyargprocessors import InvalidProcessorError, find_processors, process_arguments
+
 from .dependencies import Dependency, resolve_dependencies, run_scope, step_dependencies
-from .exceptions import InvalidInputError, InvalidParserError, InvalidStepError, to_argument_error
+from .exceptions import InvalidStepError, to_argument_error
 from .flow import Flow, action_name
 from .inputs import RunInput, mark_required_inputs, resolve_inputs, step_inputs
-from .parsers import find_parsers, parse_arguments
 
 type StepFn[T, **P] = Callable[Concatenate[T, P], T]
 type TapFn[T, **P] = Callable[Concatenate[T, P], Any]
@@ -47,6 +48,7 @@ def step[T, **P](fn: StepFn[T, P], /) -> StepFactory[T, P]:
     Raises:
         InvalidStepError: If `fn` does not accept the subject positionally.
         ArgumentError: A subclass is raised by the factory for bad arguments.
+        pyargprocessors.ProcessArgumentError: Raised by the factory when a processor fails.
 
     Example:
     ```python
@@ -127,16 +129,14 @@ def _make_step[T, **P](fn: TapFn[T, P], *, passthrough: bool) -> StepFactory[T, 
     full_signature = _arguments_signature(fn, step_name)
     dependencies = step_dependencies(fn, step_name)
     inputs = step_inputs(fn, step_name)
-    parsers = find_parsers(fn, step_name)
+    processors = find_processors(fn, name=step_name, skip=1)
     injected = dependencies.keys() | inputs.keys()
 
-    if both := sorted(dependencies.keys() & inputs.keys()):
-        msg = f"Step '{step_name}' cannot take {both} both as a dependency and as a run input"
-        raise InvalidInputError(msg)
-
-    if both := sorted(parsers.keys() & injected):
-        msg = f"Step '{step_name}' cannot both parse and inject {both}: nothing is passed for them"
-        raise InvalidParserError(msg)
+    if both := sorted(processors.keys() & injected):
+        msg = (
+            f"Step '{step_name}' cannot both process and inject {both}: nothing is passed for them"
+        )
+        raise InvalidProcessorError(msg)
 
     arguments_signature = Signature(
         [p for p in full_signature.parameters.values() if p.name not in injected],
@@ -145,7 +145,7 @@ def _make_step[T, **P](fn: TapFn[T, P], *, passthrough: bool) -> StepFactory[T, 
     @wraps(fn)
     def factory(*args: P.args, **kwargs: P.kwargs) -> Flow[T]:
         bound = bind_arguments(arguments_signature, step_name, args, kwargs)
-        bound = parse_arguments(parsers, bound) if parsers else bound
+        bound = process_arguments(processors, bound) if processors else bound
         call = (
             _inject(fn, step_name, full_signature, bound, dependencies=dependencies, inputs=inputs)
             if injected

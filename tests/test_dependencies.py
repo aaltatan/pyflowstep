@@ -35,7 +35,9 @@ def get_prefix() -> str:
     return ">"
 
 
-type Prefix = Annotated[str, Depends(get_prefix)]
+PREFIX = Depends(get_prefix)
+
+type AnnotatedPrefix = Annotated[str, Depends(get_prefix)]
 
 
 @step
@@ -44,14 +46,7 @@ def label(items: list[str], text: str, prefix: str = Depends(get_prefix)) -> lis
 
 
 @step
-def label_annotated(
-    items: list[str], text: str, prefix: Annotated[str, Depends(get_prefix)]
-) -> list[str]:
-    return [*items, f"{prefix}{text}"]
-
-
-@step
-def label_alias(items: list[str], prefix: Prefix, text: str = "x") -> list[str]:
+def label_reused(items: list[str], prefix: str = PREFIX, text: str = "x") -> list[str]:
     return [*items, f"{prefix}{text}"]
 
 
@@ -64,20 +59,10 @@ class TestDeclaration:
     def test_default_value_form(self) -> None:
         assert label("a")([]) == [">a"]
 
-    def test_annotated_form(self) -> None:
-        assert label_annotated("a")([]) == [">a"]
-
-    def test_annotated_alias_form(self) -> None:
-        assert label_alias()([]) == [">x"]
-        assert label_alias("b")([]) == [">b"]
-        assert label_alias(text="c")([]) == [">c"]
-
-    def test_default_value_wins_over_annotated(self) -> None:
-        @step
-        def both(items: list[str], prefix: Prefix = Depends(lambda: "#")) -> list[str]:
-            return [*items, prefix]
-
-        assert both()([]) == ["#"]
+    def test_marker_kept_in_a_constant_is_reused(self) -> None:
+        assert label_reused()([]) == [">x"]
+        assert label_reused("b")([]) == [">b"]
+        assert label_reused(text="c")([]) == [">c"]
 
     def test_find_dependencies(self) -> None:
         assert list(find_dependencies(label)) == []  # a factory has no dependencies left
@@ -86,14 +71,14 @@ class TestDeclaration:
 
     def test_string_annotations(self) -> None:
         @step
-        def later(items: list[str], prefix: "Prefix") -> list[str]:
+        def later(items: "list[str]", prefix: "str" = Depends(get_prefix)) -> "list[str]":
             return [*items, prefix]
 
         assert later()([]) == [">"]
 
     def test_dependency_between_ordinary_parameters(self) -> None:
         @step
-        def join(items: list[str], first: str, prefix: Prefix, last: str = "z") -> list[str]:
+        def join(items: list[str], first: str, prefix: str = PREFIX, last: str = "z") -> list[str]:
             return [*items, f"{first}{prefix}{last}"]
 
         assert join("a")([]) == ["a>z"]
@@ -102,7 +87,9 @@ class TestDeclaration:
 
     def test_keyword_only_and_var_positional(self) -> None:
         @step
-        def collect(items: list[str], *texts: str, prefix: Prefix, sep: str = "") -> list[str]:
+        def collect(
+            items: list[str], *texts: str, prefix: str = PREFIX, sep: str = ""
+        ) -> list[str]:
             return [*items, *(f"{prefix}{sep}{text}" for text in texts)]
 
         assert collect("a", "b", sep="-")([]) == [">-a", ">-b"]
@@ -111,7 +98,7 @@ class TestDeclaration:
         seen: list[str] = []
 
         @tap
-        def remember(_: object, text: str, prefix: Prefix) -> None:
+        def remember(_: object, text: str, prefix: str = PREFIX) -> None:
             seen.append(f"{prefix}{text}")
 
         subject = object()
@@ -122,7 +109,7 @@ class TestDeclaration:
 class TestInvisibleArguments:
     def test_factory_signature_hides_dependencies(self) -> None:
         assert str(signature(label)) == "(text: str)"
-        assert str(signature(label_alias)) == "(text: str = 'x')"
+        assert str(signature(label_reused)) == "(text: str = 'x')"
 
     def test_cannot_be_passed_positionally(self) -> None:
         with pytest.raises(TooManyArgumentsError):
@@ -159,7 +146,7 @@ class TestRunScope:
             return [*items, obj]
 
         @step
-        def second(items: list[str], obj: Annotated[str, Depends(counter)]) -> list[str]:
+        def second(items: list[str], obj: str = Depends(counter)) -> list[str]:
             return [*items, obj.upper()]
 
         assert (first() >> second())([]) == ["object-1", "OBJECT-1"]
@@ -227,9 +214,7 @@ class TestSubDependencies:
         def get_port() -> int:
             return 25
 
-        def get_address(
-            host: str = Depends(get_host), port: Annotated[int, Depends(get_port)] = 0
-        ) -> str:
+        def get_address(host: str = Depends(get_host), port: int = Depends(get_port)) -> str:
             return f"{host}:{port}"
 
         @step
@@ -266,7 +251,7 @@ class TestSubDependencies:
 
     def test_class_as_provider(self) -> None:
         class Settings:
-            def __init__(self, prefix: Prefix) -> None:
+            def __init__(self, prefix: str = PREFIX) -> None:
                 self.prefix = prefix
 
         @step
@@ -277,7 +262,7 @@ class TestSubDependencies:
 
     def test_callable_object_as_provider(self) -> None:
         class Greeter:
-            def __call__(self, prefix: Prefix) -> str:
+            def __call__(self, prefix: str = PREFIX) -> str:
                 return f"{prefix}hello"
 
         @step
@@ -287,7 +272,7 @@ class TestSubDependencies:
         assert use()([]) == [">hello"]
 
     def test_partial_as_provider(self) -> None:
-        def get_address(host: str, prefix: Prefix) -> str:
+        def get_address(host: str, prefix: str = PREFIX) -> str:
             return f"{prefix}{host}"
 
         @step
@@ -420,7 +405,7 @@ class TestCleanup:
         assert log == ["open session", "close session", "open session", "close session"]
 
     def test_generator_with_sub_dependency(self, log: list[str]) -> None:
-        def get_session(prefix: Prefix) -> Iterator[str]:
+        def get_session(prefix: str = PREFIX) -> Iterator[str]:
             log.append("open")
             yield f"{prefix}session"
             log.append("close")
@@ -454,7 +439,9 @@ class TestOverrides:
             return "<"
 
         @step
-        def wrap(items: list[str], prefix: Prefix, suffix: str = Depends(get_suffix)) -> list[str]:
+        def wrap(
+            items: list[str], prefix: str = PREFIX, suffix: str = Depends(get_suffix)
+        ) -> list[str]:
             return [*items, f"{prefix}{suffix}"]
 
         with override_dependencies({get_prefix: lambda: "#"}):
@@ -470,7 +457,7 @@ class TestOverrides:
             assert label("a")([]) == ["@a"]
 
     def test_override_applies_to_sub_dependencies(self) -> None:
-        def get_address(prefix: Prefix) -> str:
+        def get_address(prefix: str = PREFIX) -> str:
             return f"{prefix}host"
 
         @step
@@ -517,27 +504,59 @@ class TestInvalidDeclarations:
             Depends(provider)
 
     def test_subject_cannot_be_injected(self) -> None:
-        def bad(items: Prefix, text: str) -> str:
+        def bad(items: str = PREFIX, text: str = "") -> str:
             return items
 
         with pytest.raises(InvalidDependencyError, match="'bad' cannot inject its subject 'items'"):
             step(bad)
 
-    @pytest.mark.parametrize(
-        ("fn", "kind"),
-        [
-            (lambda items, prefix=Depends(get_prefix), /: items, "positional-only"),
-            (lambda items, *prefix: items, "variadic positional"),
-            (lambda items, **prefix: items, "variadic keyword"),
-        ],
-    )
-    def test_unsupported_parameter_kinds(self, fn: Any, kind: str) -> None:
-        fn.__annotations__ = {"prefix": Prefix}
+    def test_positional_only_parameter_cannot_be_injected(self) -> None:
+        def bad(items: list[str], prefix: str = PREFIX, /) -> list[str]:
+            return items
 
         with pytest.raises(
-            InvalidDependencyError, match=f"cannot inject {kind} parameter 'prefix'"
+            InvalidDependencyError, match="'bad' cannot inject positional-only parameter 'prefix'"
         ):
-            step(fn)
+            step(bad)
+
+    @pytest.mark.parametrize(
+        "annotation",
+        [Annotated[str, Depends(get_prefix)], AnnotatedPrefix, "AnnotatedPrefix"],
+    )
+    def test_annotated_form_is_rejected_on_a_step(self, annotation: Any) -> None:
+        def bad(items: list[str], prefix: str) -> list[str]:
+            return items
+
+        bad.__annotations__["prefix"] = annotation
+
+        with pytest.raises(InvalidDependencyError) as error:
+            step(bad)
+
+        assert str(error.value) == (
+            "Step 'bad' uses Depends inside Annotated for 'prefix'; write it as the default "
+            "value, `prefix: <type> = Depends(get_prefix)`, so type checkers see the parameter "
+            "as optional"
+        )
+
+    def test_annotated_form_is_rejected_on_variadic_parameters(self) -> None:
+        def bad(items: list[str], *prefix: AnnotatedPrefix) -> list[str]:
+            return items
+
+        with pytest.raises(InvalidDependencyError, match="uses Depends inside Annotated"):
+            step(bad)
+
+    def test_annotated_form_is_rejected_on_a_provider(self) -> None:
+        def get_mailer(prefix: AnnotatedPrefix) -> str:
+            return prefix
+
+        def send(order: str, mailer: str = Depends(get_mailer)) -> str:
+            return order
+
+        with pytest.raises(
+            InvalidDependencyError,
+            match="Provider 'get_mailer' uses Depends inside Annotated for 'prefix'",
+        ):
+            step(send)
 
     def test_provider_with_a_required_plain_parameter(self) -> None:
         def get_mailer(host: str) -> str:
@@ -567,7 +586,7 @@ class TestInvalidDeclarations:
             step(send)
 
     def test_provider_with_positional_only_dependency(self) -> None:
-        def get_mailer(prefix: Prefix, /) -> str:
+        def get_mailer(prefix: str = PREFIX, /) -> str:
             return prefix
 
         def send(order: str, mailer: str = Depends(get_mailer)) -> str:

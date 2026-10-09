@@ -5,10 +5,10 @@ from typing import Annotated, Any, Literal, NotRequired, TypedDict
 from uuid import UUID
 
 import pytest
+from pyargprocessors import Process
 
 from pyflowstep import (
     Depends,
-    Parse,
     StepsRegistry,
     get_flow_json_schema,
     get_json_schema,
@@ -227,7 +227,7 @@ class TestDependenciesAreHidden:
             number: int,
             size: int = Depends(get_page_size),
             *,
-            limit: Annotated[int, Depends(get_page_size)],
+            limit: int = Depends(get_page_size),
             order: str = "asc",
         ) -> object:
             return page
@@ -248,54 +248,54 @@ class Loader:
         self.source = source
 
 
-type Rows = Annotated[list[dict[str, int]], Parse(load_rows)]
+type Rows = Annotated[list[dict[str, int]], Process(load_rows)]
 
 
-class TestParsedTypes:
-    """A parsed type is described by what its parser accepts: that is what the JSON sends."""
+class TestProcessedTypes:
+    """A processed type is described by what its processor accepts: that is what the JSON sends."""
 
-    def test_schema_follows_the_parser_input(self) -> None:
-        assert get_json_schema(Annotated[list[dict[str, int]], Parse(load_rows)]) == {
+    def test_schema_follows_the_processor_input(self) -> None:
+        assert get_json_schema(Annotated[list[dict[str, int]], Process(load_rows)]) == {
             "type": "string"
         }
 
     def test_through_a_type_alias(self) -> None:
         assert get_json_schema(Rows) == {"type": "string"}
 
-    def test_class_as_parser_uses_its_init(self) -> None:
-        assert get_json_schema(Annotated[Loader, Parse(Loader)]) == {
+    def test_class_as_processor_uses_its_init(self) -> None:
+        assert get_json_schema(Annotated[Loader, Process(Loader)]) == {
             "enum": ["disk", "cloud"],
             "type": "string",
         }
 
     @pytest.mark.parametrize(
-        "parser", [int, float, str.strip, Decimal, date.fromisoformat, lambda value: value]
+        "processor", [int, float, str.strip, Decimal, date.fromisoformat, lambda value: value]
     )
-    def test_parser_without_input_annotation_falls_back_to_the_declared_type(
-        self, parser: Any
+    def test_processor_without_input_annotation_falls_back_to_the_declared_type(
+        self, processor: Any
     ) -> None:
-        assert get_json_schema(Annotated[int, Parse(parser)]) == {"type": "integer"}
+        assert get_json_schema(Annotated[int, Process(processor)]) == {"type": "integer"}
 
-    def test_enum_parser_keeps_the_enum_schema(self) -> None:
-        assert get_json_schema(Annotated[Color, Parse(Color)]) == {
+    def test_enum_processor_keeps_the_enum_schema(self) -> None:
+        assert get_json_schema(Annotated[Color, Process(Color)]) == {
             "enum": ["red", "blue"],
             "type": "string",
         }
 
-    def test_only_the_first_parser_decides(self) -> None:
-        annotation = Annotated[list[dict[str, int]], Parse(str.strip), Parse(load_rows)]
+    def test_only_the_first_processor_decides(self) -> None:
+        annotation = Annotated[list[dict[str, int]], Process(str.strip), Process(load_rows)]
         assert get_json_schema(annotation) == {
             "type": "array",
             "items": get_json_schema(dict[str, int]),
         }
 
     def test_other_metadata_is_ignored(self) -> None:
-        assert get_json_schema(Annotated[int, "meta", Parse(load_rows)]) == {"type": "string"}
+        assert get_json_schema(Annotated[int, "meta", Process(load_rows)]) == {"type": "string"}
 
-    def test_step_schema_uses_parsed_types(self) -> None:
+    def test_step_schema_uses_processed_types(self) -> None:
         @step
         def merge(
-            data: object, key: str, rows: Rows, *more: Rows, limit: Annotated[int, Parse(int)] = 5
+            data: object, key: str, rows: Rows, *more: Rows, limit: Annotated[int, Process(int)] = 5
         ) -> object:
             return data
 
