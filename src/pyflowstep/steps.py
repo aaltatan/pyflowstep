@@ -9,24 +9,27 @@ remaining arguments returns a single-step `Flow`, ready to be composed.
 
     click("button#submit")  # -> Flow(click)
 
-Two markers can sit on a parameter:
+Three markers can sit on a parameter:
 
 - `Annotated[T, Parse(fn)]` applies `fn` to the argument when the step is built,
   see `pyflowstep.parsers`.
 - `Depends(provider)` makes it no argument at all: it is injected when the flow
   runs, see `pyflowstep.dependencies`.
+- `Input[T]` makes it no argument either: the caller supplies it when it runs
+  the flow, see `pyflowstep.inputs`.
 
 Naming steps is a registry concern, see `StepsRegistry`.
 """
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from functools import wraps
 from inspect import BoundArguments, Parameter, Signature, signature
 from typing import Any, Concatenate
 
 from .dependencies import Dependency, resolve_dependencies, run_scope, step_dependencies
-from .exceptions import InvalidParserError, InvalidStepError, to_argument_error
+from .exceptions import InvalidInputError, InvalidParserError, InvalidStepError, to_argument_error
 from .flow import Flow, action_name
+from .inputs import mark_required_inputs, resolve_inputs, step_inputs
 from .parsers import find_parsers, parse_arguments
 
 type StepFn[T, **P] = Callable[Concatenate[T, P], T]
@@ -123,14 +126,20 @@ def _make_step[T, **P](fn: TapFn[T, P], *, passthrough: bool) -> StepFactory[T, 
     step_name = action_name(fn)
     full_signature = _arguments_signature(fn, step_name)
     dependencies = step_dependencies(fn, step_name)
+    inputs = step_inputs(fn, step_name)
     parsers = find_parsers(fn, step_name)
+    injected = dependencies.keys() | inputs.keys()
 
-    if both := sorted(parsers.keys() & dependencies.keys()):
+    if both := sorted(dependencies.keys() & inputs.keys()):
+        msg = f"Step '{step_name}' cannot take {both} both as a dependency and as a run input"
+        raise InvalidInputError(msg)
+
+    if both := sorted(parsers.keys() & injected):
         msg = f"Step '{step_name}' cannot both parse and inject {both}: nothing is passed for them"
         raise InvalidParserError(msg)
 
     arguments_signature = Signature(
-        [p for p in full_signature.parameters.values() if p.name not in dependencies],
+        [p for p in full_signature.parameters.values() if p.name not in injected],
     )
 
     @wraps(fn)
@@ -138,9 +147,13 @@ def _make_step[T, **P](fn: TapFn[T, P], *, passthrough: bool) -> StepFactory[T, 
         bound = bind_arguments(arguments_signature, step_name, args, kwargs)
         bound = parse_arguments(parsers, bound) if parsers else bound
         call = (
-            _inject(fn, full_signature, bound, dependencies) if dependencies else _call(fn, bound)
+            _inject(fn, step_name, full_signature, bound, dependencies=dependencies, inputs=inputs)
+            if injected
+            else _call(fn, bound)
         )
-        return Flow(_make_action(call, fn, step_name, passthrough=passthrough))
+        action = _make_action(call, fn, step_name, passthrough=passthrough)
+        mark_required_inputs(action, inputs)
+        return Flow(action)
 
     factory.__signature__ = arguments_signature  # type: ignore[attr-defined]
     return factory
@@ -171,15 +184,21 @@ def _call(fn: Callable[..., Any], bound: BoundArguments) -> Callable[[Any], Any]
 
 def _inject(
     fn: Callable[..., Any],
+    step_name: str,
     full_signature: Signature,
     bound: BoundArguments,
-    dependencies: dict[str, Dependency],
+    *,
+    dependencies: Mapping[str, Dependency],
+    inputs: Mapping[str, bool],
 ) -> Callable[[Any], Any]:
-    """Like `_call`, resolving the dependencies each time the step runs."""
+    """Like `_call`, resolving the run inputs and the dependencies each time the step runs."""
 
     def call(subject: Any) -> Any:
         with run_scope() as run:
-            resolved = resolve_dependencies(run, dependencies)
+            resolved = {
+                **resolve_inputs(run, inputs, step_name),
+                **resolve_dependencies(run, dependencies),
+            }
             arguments = BoundArguments(full_signature, {**bound.arguments, **resolved})  # type: ignore[arg-type]
             return fn(subject, *arguments.args, **arguments.kwargs)
 

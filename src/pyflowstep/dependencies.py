@@ -147,10 +147,11 @@ def step_dependencies(fn: Callable[..., Any], step_name: str) -> dict[str, Depen
 
 @dataclass(slots=True)
 class Run:
-    """The scope of one flow run: resolved objects and their pending cleanups."""
+    """The scope of one flow run: resolved objects, their pending cleanups and the run inputs."""
 
     cache: dict[Provider, Any] = field(default_factory=dict)
     cleanups: ExitStack = field(default_factory=ExitStack)
+    inputs: Mapping[str, Any] = field(default_factory=dict)
 
 
 _RUN: ContextVar[Run | None] = ContextVar("pyflowstep_run", default=None)
@@ -161,8 +162,12 @@ _OVERRIDES: ContextVar[Mapping[Provider, Provider]] = ContextVar(
 
 
 @contextmanager
-def run_scope() -> Iterator[Run]:
+def run_scope(inputs: Mapping[str, Any] | None = None) -> Iterator[Run]:
     """Open the scope of a flow run, or join the one already open.
+
+    `inputs` are the values the caller hands to the run, see `pyflowstep.inputs`.
+    Joining an open run with inputs of its own lays them over the outer ones
+    until the inner scope closes.
 
     When the outermost scope closes, generator providers are cleaned up in
     reverse order. An error raised inside the scope is thrown into them at
@@ -171,10 +176,11 @@ def run_scope() -> Iterator[Run]:
     active = _RUN.get()
 
     if active is not None:
-        yield active
+        with _joined(active, inputs or {}) as run:
+            yield run
         return
 
-    run = Run()
+    run = Run(inputs=dict(inputs or {}))
     token = _RUN.set(run)
 
     try:
@@ -184,6 +190,22 @@ def run_scope() -> Iterator[Run]:
         raise
     else:
         run.cleanups.close()
+    finally:
+        _RUN.reset(token)
+
+
+@contextmanager
+def _joined(active: Run, inputs: Mapping[str, Any]) -> Iterator[Run]:
+    """Join an open run, laying `inputs` over its own while the inner scope is open."""
+    if not inputs:
+        yield active
+        return
+
+    run = Run(active.cache, active.cleanups, {**active.inputs, **inputs})
+    token = _RUN.set(run)
+
+    try:
+        yield run
     finally:
         _RUN.reset(token)
 

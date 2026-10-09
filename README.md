@@ -9,6 +9,7 @@ A lightweight, typed Python library for composing functions into readable, reusa
 - step arguments are validated and parsed when a flow is **built**, not halfway through running it
 - raw JSON values become typed arguments with a `Parse` marker next to the parameter
 - steps get external objects (a mailer, a database session) through FastAPI-style `Depends`
+- the caller hands per-run values to a flow by name: `flow(page, user=user)` fills every `user: Input[User]`
 - registry-based registration keeps steps organized and discoverable
 - flow definitions can be compiled from dictionaries or JSON
 - every registry can describe its flow language as a JSON Schema
@@ -158,7 +159,7 @@ pipeline      # Flow(add >> multiply >> add)
 pipeline(1)   # 31
 ```
 
-`step` and `tap` do one thing: turn a function into a flow factory. Naming a step belongs to the [registry](#registry). Two markers can sit on a parameter: [`Parse`](#parsing-arguments) to convert the value passed for it, and [`Depends`](#dependencies) to inject an object nobody passes.
+`step` and `tap` do one thing: turn a function into a flow factory. Naming a step belongs to the [registry](#registry). Three markers can sit on a parameter: [`Parse`](#parsing-arguments) to convert the value passed for it, [`Depends`](#dependencies) to inject an object nobody passes, and [`Input`](#run-inputs) to receive a value from whoever runs the flow.
 
 Arguments are bound against the function signature **immediately**, so mistakes fail fast:
 
@@ -509,6 +510,71 @@ See [`examples/dependencies.py`](examples/dependencies.py) for a complete flow w
 
 ---
 
+## Run inputs
+
+Some values exist only where the flow is run: the logged-in user, the record being processed, credentials read from a prompt. No provider can build them and JSON must not hold them. Annotate the parameter with `Input[T]` and the caller supplies it, by name, when it runs the flow:
+
+```python
+from pyflowstep import Input, StepsRegistry
+
+steps = StepsRegistry[Page]()
+
+
+@steps.tap()
+def login(page: Page, url: str, credentials: Input[Credentials]) -> None:
+    page.navigate(url)
+    page.fill("#user", credentials.username)
+    page.fill("#password", credentials.password)
+
+
+@steps.tap()
+def fill_year(page: Page, selector: str, voucher: Input[Voucher]) -> None:
+    page.fill(selector, voucher.year)
+
+
+flow = login("https://example.com/login") >> fill_year("#year")   # inputs are not arguments
+
+flow(page, credentials=credentials, voucher=voucher)              # they are given to the run
+```
+
+```json
+[
+  {"name": "login", "args": ["https://example.com/login"]},
+  {"name": "fill_year", "args": ["#year"]}
+]
+```
+
+The name of the input is the name of the parameter, and every step that declares it receives the same value.
+
+### Checked before anything runs
+
+A flow knows the inputs its steps require, and checks them before the first step runs. A forgotten input never fails halfway through:
+
+```python
+flow.inputs   # frozenset({'credentials', 'voucher'})
+
+flow(page, credentials=credentials)
+# MissingInputError: missing run input 'voucher' for step 'fill_year'; run the flow as flow(subject, voucher=...)
+```
+
+### Rules
+
+- **Invisible to JSON**, like a dependency: an input is absent from the JSON schema, cannot be parsed, and passing one while building the flow raises `UnexpectedKeywordArgumentError` (or `TooManyArgumentsError`).
+- **A default value makes the input optional**: `note: Input[str] = ""` is used when the caller passes no `note`. Optional inputs are not listed in `flow.inputs`.
+- **Extra inputs are ignored**, so one caller can run different flows, each using the inputs it needs.
+- **Nested flows see the inputs of the run they join.** A flow called from inside a step can be given inputs of its own, `inner(page, voucher=other)`; they are laid over the outer ones for that call only.
+- **Declarations are checked early**, when the step is created, with `InvalidInputError`: an input on the subject, on a positional-only, `*args` or `**kwargs` parameter, or on a parameter that is also a dependency. A provider cannot take an input.
+
+### `Input` or `Depends`?
+
+| The object…                                                  | Use                                   |
+| ------------------------------------------------------------ | ------------------------------------- |
+| is written in the flow definition (a selector, a limit)      | a plain argument, with `Parse` if needed |
+| can be built by a function, the same way for every caller (a mailer, a session) | `Depends(provider)`     |
+| is only known to whoever runs the flow (a user, a record, credentials) | `Input[T]`                  |
+
+---
+
 ## Compiling flows from JSON
 
 `FlowCompiler` turns a flow definition — a list of step dictionaries — into a `Flow`.
@@ -715,13 +781,15 @@ checkout = note_if(is_large(Decimal(100)), "needs approval") >> apply_tax(round(
 | `Parse(fn)`                                                  | marker    | Apply `fn` to the value passed for a parameter, see [Parsing arguments](#parsing-arguments) |
 | `Depends(provider)`                                          | marker    | Inject a parameter by calling `provider`, see [Dependencies](#dependencies) |
 | `override_dependencies(mapping)`                             | context manager | Replace providers inside a `with` block, for tests        |
+| `Input[T]`                                                   | marker    | Receive a parameter from the caller of the flow, `flow(subject, name=value)`, see [Run inputs](#run-inputs) |
+| `Flow.inputs`                                                | property  | The names of the inputs a flow requires                         |
 | `FlowCompiler[T](steps)`                                     | class     | `compile(definition)` turns parsed step dicts into a flow       |
 | `validate_step_dict(item, path)`                             | function  | Validate one step dictionary                                    |
 | `get_json_schema(annotation)`                                | function  | JSON Schema of a type annotation                                |
 | `get_step_json_schema(name, step)`                           | function  | JSON Schema of one step dictionary                              |
 | `get_flow_json_schema(steps)`                                | function  | JSON Schema of a whole flow definition                          |
 
-All exceptions derive from `PyflowstepError`; argument errors, `InvalidParserError` and `InvalidDependencyError` also derive from `TypeError`, definition errors from `ValueError`, and `StepDoesNotExistError` from `LookupError`.
+All exceptions derive from `PyflowstepError`; argument errors, `InvalidParserError`, `InvalidDependencyError`, `InvalidInputError` and `MissingInputError` also derive from `TypeError`, definition errors from `ValueError`, and `StepDoesNotExistError` from `LookupError`.
 
 ---
 

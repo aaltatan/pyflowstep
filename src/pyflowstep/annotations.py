@@ -39,14 +39,45 @@ def annotated_metadata(annotation: Any) -> tuple[Any, ...]:
     ('tcp', 8080)
     >>> annotated_metadata(int)
     ()
+    >>> type Tagged[T] = Annotated[T, "tag"]
+    >>> annotated_metadata(Tagged[int])
+    ('tag',)
+    >>> annotated_metadata(Annotated[Tagged[Port], "outer"])
+    ('tcp', 8080, 'tag', 'outer')
+    >>> type Fixed[T] = Annotated[int, "fixed"]
+    >>> annotated_metadata(Fixed[str])
+    ('fixed',)
 
     ```
 
     """
-    while isinstance(annotation, TypeAliasType):
-        annotation = annotation.__value__
+    annotation = _alias_value(annotation)
 
-    return get_args(annotation)[1:] if get_origin(annotation) is Annotated else ()
+    if get_origin(annotation) is not Annotated:
+        return ()
+
+    inner, *metadata = get_args(annotation)
+    return (*annotated_metadata(inner), *metadata)
+
+
+def _alias_value(annotation: Any) -> Any:
+    """Return what a `type` alias stands for, also when it is subscripted (`Alias[int]`)."""
+    while True:
+        origin = get_origin(annotation)
+
+        if isinstance(annotation, TypeAliasType):
+            annotation = annotation.__value__
+        elif isinstance(origin, TypeAliasType):
+            annotation = _substituted(origin.__value__, get_args(annotation))
+        else:
+            return annotation
+
+
+def _substituted(value: Any, arguments: tuple[Any, ...]) -> Any:
+    try:
+        return value[arguments]
+    except TypeError:  # the alias does not use its type parameters
+        return value
 
 
 def _annotated_function(fn: Callable[..., Any]) -> Callable[..., Any]:

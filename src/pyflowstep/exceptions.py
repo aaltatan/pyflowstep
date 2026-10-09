@@ -49,6 +49,18 @@ class InvalidDependencyError(PyflowstepError, TypeError):
     """
 
 
+class InvalidInputError(PyflowstepError, TypeError):
+    """Raised when an `Input[...]` declaration cannot work.
+
+    For example an input on the subject, on a positional-only, `*args` or
+    `**kwargs` parameter, or on a parameter that is also a dependency.
+    """
+
+
+class MissingInputError(PyflowstepError, TypeError):
+    """Raised when a flow runs without an input one of its steps requires."""
+
+
 class InvalidParserError(PyflowstepError, TypeError):
     """Raised when a `Parse(...)` marker cannot work.
 

@@ -27,10 +27,12 @@ from .exceptions import (
     ArgumentError,
     InvalidDependencyError,
     InvalidFlowDefinitionError,
+    InvalidInputError,
     InvalidParserError,
     InvalidStepError,
     InvalidStepNameError,
     MissingArgumentError,
+    MissingInputError,
     MultipleValuesArgumentError,
     ParseArgumentError,
     PositionalOnlyArgumentError,
@@ -41,6 +43,7 @@ from .exceptions import (
     UnexpectedKeywordArgumentError,
 )
 from .flow import Action, Flow, compose
+from .inputs import Input
 from .json_schema import get_flow_json_schema, get_json_schema, get_step_json_schema
 from .parsers import Parse
 from .registry import StepsRegistry
@@ -53,12 +56,15 @@ __all__ = [
     "Flow",
     "FlowCompiler",
     "FlowDefinition",
+    "Input",
     "InvalidDependencyError",
     "InvalidFlowDefinitionError",
+    "InvalidInputError",
     "InvalidParserError",
     "InvalidStepError",
     "InvalidStepNameError",
     "MissingArgumentError",
+    "MissingInputError",
     "MultipleValuesArgumentError",
     "Parse",
     "ParseArgumentError",
