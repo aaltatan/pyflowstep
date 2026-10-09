@@ -18,7 +18,7 @@ class Flow[T]:
     with `>>`, which always returns a *new* flow and never mutates its operands.
 
     Keyword arguments given to the call are the run inputs: `flow(page, user=user)`
-    hands `user` to every step that declares `user: Input[User]`.
+    hands `user` to every step that declares `user: User = Input()`.
 
     Args:
         *actions: The callables to run, in order. Each one takes the subject and

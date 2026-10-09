@@ -15,8 +15,8 @@ Three markers can sit on a parameter:
   see `pyflowstep.parsers`.
 - `Depends(provider)` makes it no argument at all: it is injected when the flow
   runs, see `pyflowstep.dependencies`.
-- `Input[T]` makes it no argument either: the caller supplies it when it runs
-  the flow, see `pyflowstep.inputs`.
+- `Input()` as the default makes it no argument either: the caller supplies it
+  when it runs the flow, see `pyflowstep.inputs`.
 
 Naming steps is a registry concern, see `StepsRegistry`.
 """
@@ -29,7 +29,7 @@ from typing import Any, Concatenate
 from .dependencies import Dependency, resolve_dependencies, run_scope, step_dependencies
 from .exceptions import InvalidInputError, InvalidParserError, InvalidStepError, to_argument_error
 from .flow import Flow, action_name
-from .inputs import mark_required_inputs, resolve_inputs, step_inputs
+from .inputs import RunInput, mark_required_inputs, resolve_inputs, step_inputs
 from .parsers import find_parsers, parse_arguments
 
 type StepFn[T, **P] = Callable[Concatenate[T, P], T]
@@ -189,14 +189,14 @@ def _inject(
     bound: BoundArguments,
     *,
     dependencies: Mapping[str, Dependency],
-    inputs: Mapping[str, bool],
+    inputs: Mapping[str, RunInput],
 ) -> Callable[[Any], Any]:
     """Like `_call`, resolving the run inputs and the dependencies each time the step runs."""
 
     def call(subject: Any) -> Any:
         with run_scope() as run:
             resolved = {
-                **resolve_inputs(run, inputs, step_name),
+                **resolve_inputs(run.inputs, inputs, step_name),
                 **resolve_dependencies(run, dependencies),
             }
             arguments = BoundArguments(full_signature, {**bound.arguments, **resolved})  # type: ignore[arg-type]

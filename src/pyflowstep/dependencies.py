@@ -35,6 +35,7 @@ from typing import Any
 
 from .annotations import annotated_metadata, resolved_annotations
 from .exceptions import InvalidDependencyError
+from .inputs import RunInput
 
 type Provider = Callable[..., Any]
 
@@ -292,6 +293,13 @@ def _validate_provider(provider: Provider, path: tuple[Provider, ...]) -> None:
     dependencies = find_dependencies(provider)
 
     for name, parameter in parameters.items():
+        if isinstance(parameter.default, RunInput):
+            msg = (
+                f"Provider '{_name(provider)}' cannot take the run input '{name}'; "
+                "only steps receive run inputs"
+            )
+            raise InvalidDependencyError(msg)
+
         if name in dependencies and parameter.kind in _UNSUPPORTED_KINDS:
             msg = (
                 f"Provider '{_name(provider)}' cannot inject {parameter.kind.description} "
