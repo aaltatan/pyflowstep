@@ -6,7 +6,10 @@ A lightweight, typed Python library for composing functions into readable, reusa
 
 - steps are plain functions: `(subject, *args, **kwargs) -> subject`
 - flows are immutable values that compose with `>>`
-- step arguments are validated and processed when a flow is **built**, not halfway through running it
+- step arguments are validated and parsed when a flow is **built**, not halfway through running it
+- raw JSON values become typed arguments with a `Parse` marker next to the parameter
+- steps get external objects (a mailer, a database session) through FastAPI-style `Depends`
+- the caller hands per-run values to a flow by name: `flow(page, user=user)` fills every `user: Input[User]`
 - registry-based registration keeps steps organized and discoverable
 - flow definitions can be compiled from dictionaries or JSON
 - every registry can describe its flow language as a JSON Schema
@@ -156,7 +159,7 @@ pipeline      # Flow(add >> multiply >> add)
 pipeline(1)   # 31
 ```
 
-`step` and `tap` do one thing: turn a function into a flow factory. Naming a step and processing its arguments belong to the [registry](#registry).
+`step` and `tap` do one thing: turn a function into a flow factory. Naming a step belongs to the [registry](#registry). Three markers can sit on a parameter: [`Parse`](#parsing-arguments) to convert the value passed for it, [`Depends`](#dependencies) to inject an object nobody passes, and [`Input`](#run-inputs) to receive a value from whoever runs the flow.
 
 Arguments are bound against the function signature **immediately**, so mistakes fail fast:
 
@@ -203,7 +206,7 @@ def click(page: Page, selector: str) -> None:
     page.click(selector)
 
 
-@page_steps.tap(name="type", processors={"value": str})
+@page_steps.tap(name="type")
 def fill(page: Page, selector: str, value: str) -> None:
     """Type a value into a field."""
     page.fill(selector, value)
@@ -223,116 +226,352 @@ page_steps.register(lambda page: page, name="noop")  # register without a decora
 
 | Method / attribute                                               | Description                                                 |
 | ---------------------------------------------------------------- | ----------------------------------------------------------- |
-| `step(name=, description=, processors=, hidden=)`                | Decorator for `(subject, ...) -> subject` functions         |
-| `tap(name=, description=, processors=, hidden=)`                 | Decorator for side-effect functions (return value ignored)  |
-| `register(fn, *, name=, description=, processors=, hidden=, passthrough=)` | Register without decorator syntax                 |
+| `step(name=, description=, hidden=)`                             | Decorator for `(subject, ...) -> subject` functions         |
+| `tap(name=, description=, hidden=)`                              | Decorator for side-effect functions (return value ignored)  |
+| `register(fn, *, name=, description=, hidden=, passthrough=)`    | Register without decorator syntax                           |
 | `steps`                                                          | Read-only mapping of visible steps                          |
 | `registry[name]`, `name in registry`, `len()`, iteration         | Lookup over visible steps                                   |
 
 - `name` is the step's public name: the compiler looks it up, and `repr` and argument errors show it (`Flow(type)` above, not `Flow(fill)`).
-- `processors` transform the raw arguments every time the factory is called, before they reach the step. See [Processors](#processors).
 - `description` overrides the docstring, which becomes the step description in the JSON schema.
 
 ---
 
-## Processors
+## Parsing arguments
 
-Processors transform raw arguments before a step is built. They matter most for JSON and web forms, where every value arrives as a string, number, boolean, list, object or null, while your steps want dates, decimals, enums and clean text.
+Flows often come from JSON or a web form, where every value arrives as a string, number, boolean, list, object or null, while your steps want dates, decimals, enums, clean text or loaded data. Mark the parameter with `Parse(fn)` inside `Annotated`, and `fn` is applied to the value that is passed for it:
 
-Processors are a registry option: pass `processors=` to `registry.step()`, `registry.tap()` or `registry.register()`.
+```python
+from typing import Annotated
 
-### The four forms
+from pyflowstep import Parse
 
-| `processors=`                              | Effect                                                         |
-| ------------------------------------------ | -------------------------------------------------------------- |
-| *(omitted, `None`)*                        | Arguments reach the step exactly as given                      |
-| `fn`                                       | `fn` is applied to **every** argument                          |
-| `{"name": fn, ...}`                        | Only the named arguments are processed, the rest are untouched |
-| `{"name": fn, ...: other}`                 | The named arguments use their own processor, `...` covers **all the others** |
+
+@page_steps.tap()
+def wait(page: Page, selector: str, timeout: Annotated[float, Parse(float)] = 5.0) -> None:
+    page.wait(selector, timeout)
+
+
+wait("#result", "10")   # timeout is 10.0
+```
+
+```json
+{"name": "wait", "args": ["#result", "10"]}
+```
+
+The marker sits next to the parameter it changes, and it works with the plain `@step` and `@tap` decorators too; no registry is required.
+
+### Name it once, reuse it
+
+A `type` alias gives a parsed type a name, so many steps can share it:
 
 ```python
 from decimal import Decimal
 
-
-@page_steps.tap()                                          # nothing to process
-def click(page: Page, selector: str) -> None: ...
-
-
-@barista.step(processors=Decimal)                          # every argument
-def price_between(drink: Drink, low: Decimal, high: Decimal) -> Drink: ...
+type Money = Annotated[Decimal, Parse(Decimal)]
+type Text = Annotated[str, Parse(str.strip), Parse(str.lower)]   # several parsers run left to right
 
 
-@page_steps.tap(processors={"timeout": float})             # only `timeout`, `selector` untouched
-def wait(page: Page, selector: str, timeout: float = 5.0) -> None: ...
+@catalog_steps.step()
+def price_between(products: Catalog, low: Money, high: Money) -> Catalog: ...
 
 
-@barista.step(processors={"pumps": int, ...: str.strip})   # `pumps`, and `...` for the rest
-def add_syrup(drink: Drink, flavor: str, pumps: int = 1) -> Drink: ...
+@catalog_steps.step()
+def search(products: Catalog, text: Text, min_stars: Annotated[float, Parse(float)] = 0) -> Catalog: ...
 ```
 
-### The `...` key
+### Loading data from a value in the JSON
 
-`...` (Python's `Ellipsis`) reads as "every argument not named here", just like in `tuple[int, ...]`. A named entry always wins over `...`, and a mapping holding only `...` behaves like a single callable. Because `...` can never be a parameter name, it can never clash with one.
-
-It also covers the extra keywords a step collects with `**kwargs`, which is handy for open-ended filters:
+A parser can be any function of one value, so the JSON can send a path and the step can receive what was loaded from it:
 
 ```python
-def normalize(text: str) -> str:
-    return text.strip().lower()
+def load_names(path: str) -> frozenset[str]:
+    return frozenset(Path(path).read_text().splitlines())
 
 
-@catalog_steps.step(processors={"in_stock": parse_bool, ...: normalize})
-def where(products: Catalog, *, in_stock: bool = False, **fields: str) -> Catalog: ...
+type Names = Annotated[frozenset[str], Parse(load_names)]
+
+
+@catalog_steps.step()
+def exclude(products: Catalog, names: Names) -> Catalog:
+    return tuple(product for product in products if product.name not in names)
+```
+
+```json
+{"name": "exclude", "args": ["discontinued.txt"]}
+```
+
+The file is read **once, when the flow is built**. Every run of that flow reuses the loaded names. For an object that must be fresh on every run, or that the JSON must not choose at all, use a [dependency](#dependencies) instead.
+
+### `*args` and `**kwargs`
+
+On `*args` the parser applies to each item, and on `**kwargs` to each value:
+
+```python
+@barista.step()
+def top_with(drink: Drink, *toppings: Text) -> Drink: ...
+
+
+@catalog_steps.step()
+def where(products: Catalog, *, in_stock: Annotated[bool, Parse(parse_bool)] = False, **fields: Text) -> Catalog: ...
 
 
 where(in_stock="yes", brand=" SONIC ")   # in_stock=True, brand="sonic"
 ```
 
-### Which values are processed
+### Which values are parsed, and when
 
-- A processor for a parameter applies whether the value was passed positionally **or** by keyword.
-- For `*args` it applies to each item. For `**kwargs`, each extra keyword is looked up by its own name, falling back to `...`.
-- Default values are never processed: only arguments that were actually passed go through a processor.
-- The subject (the step's first parameter) is never processed, since it is not a step argument.
-
-### When they run
-
-Processors run **once per factory call**, while the flow is being built, not every time the flow runs:
+- Only values that are **actually passed**, positionally or by keyword. Default values are never parsed.
+- Parsing runs **once per factory call**, while the flow is being built, not every time the flow runs.
+- Arguments are checked against the step's signature first, so a missing or extra argument is reported as an `ArgumentError` before any parser runs.
 
 ```python
-flow = add_syrup("  Vanilla ", "2")   # processors run here: flavor="Vanilla", pumps=2
-flow(drink)                           # the step runs with the processed values
-flow(another_drink)                   # no processing again
+flow = add_syrup("  Vanilla ", "2")   # parsed here: flavor="vanilla", pumps=2
+flow(drink)                           # the step runs with the parsed values
+flow(another_drink)                   # nothing is parsed again
 ```
-
-The arguments are first bound to the step signature, so a missing or extra argument is reported as an `ArgumentError` before any processor runs.
 
 ### Errors
 
-Mistakes in the `processors` option are caught **when the step is registered**, with `InvalidProcessorsError`:
-
-```python
-@page_steps.tap(processors={"timout": float})   # typo
-def wait(page: Page, selector: str, timeout: float = 5.0) -> None: ...
-# InvalidProcessorsError: Processors of step 'wait' name unknown parameters ['timout'], available parameters: selector, timeout
-```
-
-| Problem                                        | Message                                                          |
-| ---------------------------------------------- | ---------------------------------------------------------------- |
-| A key is not a parameter of the step           | `... name unknown parameters ['timout'], available parameters: ...` |
-| A value is not callable, e.g. `{"pumps": "int"}` | `... must be callables, not for ['pumps']`                       |
-| Neither a callable nor a mapping               | `... must be a callable or a mapping of parameter names to callables, got ...` |
-
-Steps that accept `**kwargs` allow any key, since any keyword name is valid for them.
-
-A processor that fails on a value raises `ProcessArgumentError`, chained to the original exception. Inside a compiled flow it also carries the JSON path of the step:
+A parser that fails on a value raises `ParseArgumentError`, chained to the original exception. Inside a compiled flow it also carries the JSON path of the step, so a bad value is found before anything runs:
 
 ```text
-pyflowstep.exceptions.ProcessArgumentError: Argument 'price' with value 'cheap' failed to process, [<class 'decimal.ConversionSyntax'>]
-at $[0]
+pyflowstep.exceptions.ParseArgumentError: Argument 'limit' with value 'two' failed to parse, invalid literal for int() with base 10: 'two'
+at $[1]
 ```
 
-See [`examples/processors.py`](examples/processors.py) for every form working together on data from a web form.
+A marker that cannot work raises `InvalidParserError` when the step is created:
+
+| Problem                                              | Example                                              |
+| ---------------------------------------------------- | ---------------------------------------------------- |
+| The parser is not callable                           | `Parse("int")`                                       |
+| The marker is used as a default value                | `amount: int = Parse(int)`, write `Annotated[int, Parse(int)]` |
+| The marker is on the subject (the first parameter)   | `def step(page: Annotated[Page, Parse(...)], ...)`   |
+| One parameter has both `Parse` and `Depends`         | nothing is passed for a dependency, so there is nothing to parse |
+
+### In the JSON schema
+
+A parsed parameter is described by **what the JSON must send**. The schema takes it from the type hint of the parser's own parameter (`load_names(path: str)` means `string`). If the parser has no type hint, as with `int`, `Decimal` or an enum class, the schema falls back to the parameter's type.
+
+| Parameter                                    | Schema                          |
+| -------------------------------------------- | ------------------------------- |
+| `names: Annotated[frozenset[str], Parse(load_names)]` | `{"type": "string"}`   |
+| `limit: Annotated[int, Parse(int)]`          | `{"type": "integer"}`           |
+| `kind: Annotated[Milk, Parse(Milk)]`         | `{"enum": ["whole", "oat", "almond"], "type": "string"}` |
+
+### Upgrading from 0.1
+
+The `processors=` option of the registry is gone. Move each entry onto its parameter:
+
+| 0.1                                               | 0.2                                                     |
+| ------------------------------------------------- | ------------------------------------------------------- |
+| `processors={"timeout": float}`                   | `timeout: Annotated[float, Parse(float)]`               |
+| `processors=normalize` (every argument)           | annotate each parameter, usually with a shared alias such as `Text` |
+| `processors={"pumps": int, ...: normalize}`       | `pumps: Annotated[int, Parse(int)]`, the others `Text`  |
+| `...` covering `**kwargs`                         | `**fields: Text`                                        |
+| `ProcessArgumentError`                            | `ParseArgumentError`                                    |
+| `InvalidProcessorsError`                          | removed; a key can no longer be misspelled              |
+
+See [`examples/parsing.py`](examples/parsing.py) for every form working together on data from a web form.
+
+---
+
+## Dependencies
+
+Some steps need objects that cannot be written in JSON: a mailer, a database session, an API client. Mark the parameter with `Depends(provider)` and it stops being an argument. Nobody passes it, neither Python nor JSON; `provider` is called to produce it when the flow runs.
+
+```python
+from pyflowstep import Depends, StepsRegistry
+
+steps = StepsRegistry[Order]()
+
+
+def get_mailer() -> Mailer:
+    return Mailer("smtp.example.com")
+
+
+@steps.tap()
+def send_email(order: Order, template: str, mailer: Mailer = Depends(get_mailer)) -> None:
+    mailer.send(order.customer, template)
+
+
+send_email("receipt")   # only `template` is an argument
+```
+
+```json
+[{"name": "send_email", "args": ["receipt"]}]
+```
+
+It works the same with the plain `@step` and `@tap` decorators; no registry is required.
+
+### Two ways to write it
+
+```python
+from typing import Annotated
+
+# default value: quick, for a one-off
+def send_email(order: Order, template: str, mailer: Mailer = Depends(get_mailer)) -> None: ...
+
+
+# Annotated: name the dependency once, reuse it in many steps
+type MailerDep = Annotated[Mailer, Depends(get_mailer)]
+
+def send_email(order: Order, template: str, mailer: MailerDep) -> None: ...
+def send_invoice(order: Order, mailer: MailerDep) -> None: ...
+```
+
+### One object per flow run
+
+A flow run is one scope, like one request in a web framework. A provider is called **at most once per run**, and every step of that run receives the same object. The next run starts fresh.
+
+A provider written as a generator is cleaned up when the run ends. If a step fails, the error is raised inside the provider at its `yield`, so it can roll back:
+
+```python
+from collections.abc import Iterator
+
+
+def get_session() -> Iterator[Session]:
+    session = Session()
+    try:
+        yield session          # shared by every step of this run
+    except Exception:
+        session.rollback()     # a step failed
+        raise
+    else:
+        session.commit()       # the whole flow succeeded
+    finally:
+        session.close()
+
+
+type SessionDep = Annotated[Session, Depends(get_session)]
+
+
+@steps.tap()
+def save(order: Order, session: SessionDep) -> None:
+    session.add(order)
+
+
+@steps.tap()
+def audit(order: Order, action: str, session: SessionDep) -> None:
+    session.add(AuditRow(order.id, action))   # the same session `save` used
+
+
+flow = save() >> audit("fulfilled")
+
+flow(order_1)   # session A: opened, used twice, committed, closed
+flow(order_2)   # session B
+```
+
+Cleanups run in reverse order, and a provider cannot swallow a step's error: it is always re-raised. Flows nested inside a flow, or called from inside a step, join the run that is already open.
+
+### Sub-dependencies
+
+A provider's own parameters can use `Depends` too:
+
+```python
+def get_settings() -> Settings:
+    return Settings()
+
+
+def get_mailer(settings: Settings = Depends(get_settings)) -> Mailer:
+    return Mailer(settings.smtp_host)
+```
+
+Any other provider parameter must have a default. A provider can be any callable: a function, a class, a `functools.partial`, or an object with `__call__`.
+
+### Replacing a dependency in tests
+
+```python
+from pyflowstep import override_dependencies
+
+with override_dependencies({get_mailer: FakeMailer}):
+    flow(order)          # every step that asked for get_mailer gets a FakeMailer
+
+flow(order)              # the real mailer again
+```
+
+Keys are the original providers and values the providers to call instead. Nested blocks add up, and everything is restored when the block exits, even after an error.
+
+### Rules
+
+- **Invisible to JSON.** A dependency is absent from the JSON schema, cannot be parsed, and passing one raises `UnexpectedKeywordArgumentError` (or `TooManyArgumentsError`) when the flow is built.
+- **Declarations are checked early**, when the step is created, with `InvalidDependencyError`: a provider that is not callable, is circular, or has a required parameter that is not a dependency; a dependency on the subject, or on a positional-only, `*args` or `**kwargs` parameter.
+- **Providers run late**, when the flow runs. An error inside a provider surfaces then, not at compile time.
+- A dependency is for an object the JSON must **not** choose. When the JSON should pick one by name (`"via": "email"`), use [`Parse`](#parsing-arguments) with a function that turns the name into the object.
+
+Using ruff? Its `B008` rule flags function calls in argument defaults. Tell it `Depends` is a marker:
+
+```toml
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["pyflowstep.Depends"]
+```
+
+See [`examples/dependencies.py`](examples/dependencies.py) for a complete flow with a mailer, a per-run session and a test override.
+
+---
+
+## Run inputs
+
+Some values exist only where the flow is run: the logged-in user, the record being processed, credentials read from a prompt. No provider can build them and JSON must not hold them. Annotate the parameter with `Input[T]` and the caller supplies it, by name, when it runs the flow:
+
+```python
+from pyflowstep import Input, StepsRegistry
+
+steps = StepsRegistry[Page]()
+
+
+@steps.tap()
+def login(page: Page, url: str, credentials: Input[Credentials]) -> None:
+    page.navigate(url)
+    page.fill("#user", credentials.username)
+    page.fill("#password", credentials.password)
+
+
+@steps.tap()
+def fill_year(page: Page, selector: str, voucher: Input[Voucher]) -> None:
+    page.fill(selector, voucher.year)
+
+
+flow = login("https://example.com/login") >> fill_year("#year")   # inputs are not arguments
+
+flow(page, credentials=credentials, voucher=voucher)              # they are given to the run
+```
+
+```json
+[
+  {"name": "login", "args": ["https://example.com/login"]},
+  {"name": "fill_year", "args": ["#year"]}
+]
+```
+
+The name of the input is the name of the parameter, and every step that declares it receives the same value.
+
+### Checked before anything runs
+
+A flow knows the inputs its steps require, and checks them before the first step runs. A forgotten input never fails halfway through:
+
+```python
+flow.inputs   # frozenset({'credentials', 'voucher'})
+
+flow(page, credentials=credentials)
+# MissingInputError: missing run input 'voucher' for step 'fill_year'; run the flow as flow(subject, voucher=...)
+```
+
+### Rules
+
+- **Invisible to JSON**, like a dependency: an input is absent from the JSON schema, cannot be parsed, and passing one while building the flow raises `UnexpectedKeywordArgumentError` (or `TooManyArgumentsError`).
+- **A default value makes the input optional**: `note: Input[str] = ""` is used when the caller passes no `note`. Optional inputs are not listed in `flow.inputs`.
+- **Extra inputs are ignored**, so one caller can run different flows, each using the inputs it needs.
+- **Nested flows see the inputs of the run they join.** A flow called from inside a step can be given inputs of its own, `inner(page, voucher=other)`; they are laid over the outer ones for that call only.
+- **Declarations are checked early**, when the step is created, with `InvalidInputError`: an input on the subject, on a positional-only, `*args` or `**kwargs` parameter, or on a parameter that is also a dependency. A provider cannot take an input.
+
+### `Input` or `Depends`?
+
+| The object…                                                  | Use                                   |
+| ------------------------------------------------------------ | ------------------------------------- |
+| is written in the flow definition (a selector, a limit)      | a plain argument, with `Parse` if needed |
+| can be built by a function, the same way for every caller (a mailer, a session) | `Depends(provider)`     |
+| is only known to whoever runs the flow (a user, a record, credentials) | `Input[T]`                  |
 
 ---
 
@@ -374,7 +613,7 @@ Each step dictionary has this shape — only `name` is required:
 Everything is validated while compiling, before any step runs. Errors carry a note with their JSON path:
 
 ```text
-pyflowstep.exceptions.ProcessArgumentError: Argument 'url' with value 'http://insecure.example.com' failed to process, only https urls are allowed
+pyflowstep.exceptions.ParseArgumentError: Argument 'url' with value 'http://insecure.example.com' failed to parse, only https urls are allowed
 at $[1]
 ```
 
@@ -383,7 +622,7 @@ at $[1]
 | Not a list / malformed step dict                 | `InvalidFlowDefinitionError`                           |
 | Unknown or hidden step name                      | `StepDoesNotExistError` (lists the available steps)    |
 | Missing / extra / duplicated arguments           | `MissingArgumentError`, `TooManyArgumentsError`, ...   |
-| A processor rejects a value                      | `ProcessArgumentError`                                 |
+| A parser rejects a value                         | `ParseArgumentError`                                   |
 
 A compiled flow is an ordinary `Flow`, so it composes with Python steps: `login >> click("#profile")`.
 
@@ -438,7 +677,7 @@ Supported annotations: `str`, `int`, `float`, `bool`, `None`, `Decimal`, `dateti
 
 Runnable examples live in [`examples/`](examples):
 
-- [`examples/browser.py`](examples/browser.py) — the `Page` automation above: `tap` steps, an https-only processor, reusable sub-flows and a JSON login scenario.
+- [`examples/browser.py`](examples/browser.py) — the `Page` automation above: `tap` steps, an https-only parser, reusable sub-flows and a JSON login scenario.
 
   ```bash
   uv run python -m examples.browser
@@ -455,18 +694,35 @@ Runnable examples live in [`examples/`](examples):
   # 'L espresso, 1 shot(s), 200ml whole milk, 1x vanilla syrup -> $3.65'
   ```
 
-- [`examples/processors.py`](examples/processors.py) — every `processors` form side by side, including `...` for "all other arguments" and for `**kwargs`. Shop filters arrive from a web form as raw strings (`"4"`, `"yes"`, `" SONIC "`) and are turned into typed, clean arguments:
+- [`examples/parsing.py`](examples/parsing.py) — every way to use `Parse`, side by side. Shop filters arrive from a web form as raw strings (`"4"`, `"yes"`, `" SONIC "`, a file path) and are turned into typed, clean arguments, including a set of names loaded from that path:
 
   ```bash
-  uv run python -m examples.processors
+  uv run python -m examples.parsing
   ```
 
   ```python
-  @catalog_steps.step(processors={"min_stars": float, ...: normalize})
-  def search(products: Catalog, text: str, min_stars: float = 0) -> Catalog: ...
+  type Text = Annotated[str, Parse(str.strip), Parse(str.lower)]
+  type Names = Annotated[frozenset[str], Parse(load_names)]
 
-  @catalog_steps.step(processors={"in_stock": parse_bool, ...: normalize})
-  def where(products: Catalog, *, in_stock: bool = False, **fields: str) -> Catalog: ...
+  @catalog_steps.step()
+  def where(products: Catalog, *, in_stock: Annotated[bool, Parse(parse_bool)] = False, **fields: Text) -> Catalog: ...
+
+  @catalog_steps.step()
+  def exclude(products: Catalog, names: Names) -> Catalog: ...
+  ```
+
+- [`examples/dependencies.py`](examples/dependencies.py) — steps that need objects JSON cannot describe. A fulfilment flow stored as JSON uses a mailer (with a sub-dependency) and a database session that is opened once per run, shared by two steps, then committed or rolled back. Also shows swapping the mailer for a fake in a test:
+
+  ```bash
+  uv run python -m examples.dependencies
+  ```
+
+  ```python
+  @fulfilment_steps.tap()
+  def send_email(order: Order, template: str, mailer: Mailer = Depends(get_mailer)) -> None: ...
+
+  @fulfilment_steps.tap()
+  def save(order: Order, session: SessionDep) -> None: ...
   ```
 
 ### Working with pyspecification and pyformula
@@ -522,14 +778,18 @@ checkout = note_if(is_large(Decimal(100)), "needs approval") >> apply_tax(round(
 | `compose(*actions)`                                          | function  | Combine actions and flows into one flat flow                    |
 | `step` / `tap`                                               | decorator | Turn a function into a step factory                             |
 | `StepsRegistry[T]`                                           | class     | Named collection of steps                                       |
-| `Processors`                                                 | type      | `Callable \| Mapping[str \| EllipsisType, Callable]`, see [Processors](#processors) |
+| `Parse(fn)`                                                  | marker    | Apply `fn` to the value passed for a parameter, see [Parsing arguments](#parsing-arguments) |
+| `Depends(provider)`                                          | marker    | Inject a parameter by calling `provider`, see [Dependencies](#dependencies) |
+| `override_dependencies(mapping)`                             | context manager | Replace providers inside a `with` block, for tests        |
+| `Input[T]`                                                   | marker    | Receive a parameter from the caller of the flow, `flow(subject, name=value)`, see [Run inputs](#run-inputs) |
+| `Flow.inputs`                                                | property  | The names of the inputs a flow requires                         |
 | `FlowCompiler[T](steps)`                                     | class     | `compile(definition)` turns parsed step dicts into a flow       |
 | `validate_step_dict(item, path)`                             | function  | Validate one step dictionary                                    |
 | `get_json_schema(annotation)`                                | function  | JSON Schema of a type annotation                                |
 | `get_step_json_schema(name, step)`                           | function  | JSON Schema of one step dictionary                              |
 | `get_flow_json_schema(steps)`                                | function  | JSON Schema of a whole flow definition                          |
 
-All exceptions derive from `PyflowstepError`; argument errors and `InvalidProcessorsError` also derive from `TypeError`, definition errors from `ValueError`, and `StepDoesNotExistError` from `LookupError`.
+All exceptions derive from `PyflowstepError`; argument errors, `InvalidParserError`, `InvalidDependencyError`, `InvalidInputError` and `MissingInputError` also derive from `TypeError`, definition errors from `ValueError`, and `StepDoesNotExistError` from `LookupError`.
 
 ---
 

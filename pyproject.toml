@@ -1,6 +1,6 @@
 [project]
 name = "pyflowstep"
-version = "0.1.0"
+version = "0.3.0"
 description = "A lightweight, typed Python library for composing functions into readable, reusable flows that can be defined as JSON."
 readme = "README.md"
 authors = [
@@ -78,6 +78,10 @@ ignore = [
     "PLR0911",  # guard-clause style validators return early on purpose
     "PLR0913",  # registration keeps pyspecification's keyword options
 ]
+
+[tool.ruff.lint.flake8-bugbear]
+# `x: T = Depends(provider)` is a marker, not a mutable default
+extend-immutable-calls = ["pyflowstep.Depends", "pyflowstep.dependencies.Depends"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S101", "PLR2004", "ANN", "ARG", "INP001", "E501"]

@@ -4,6 +4,9 @@ from collections.abc import Callable, Iterator
 from functools import reduce
 from typing import Any
 
+from .dependencies import run_scope
+from .inputs import check_inputs, required_inputs
+
 type Action[T] = Callable[[T], T]
 
 
@@ -13,6 +16,9 @@ class Flow[T]:
     A flow is a callable `T -> T`. Calling it threads the subject through every
     action: the output of one action is the input of the next. Flows compose
     with `>>`, which always returns a *new* flow and never mutates its operands.
+
+    Keyword arguments given to the call are the run inputs: `flow(page, user=user)`
+    hands `user` to every step that declares `user: Input[User]`.
 
     Args:
         *actions: The callables to run, in order. Each one takes the subject and
@@ -45,8 +51,15 @@ class Flow[T]:
         """The actions of the flow, in execution order."""
         return self._actions
 
-    def __call__(self, obj: T) -> T:
-        return reduce(lambda obj, action: action(obj), self._actions, obj)
+    @property
+    def inputs(self) -> frozenset[str]:
+        """The names of the run inputs the steps of the flow require, see `Input`."""
+        return frozenset().union(*map(required_inputs, self._actions))
+
+    def __call__(self, obj: T, /, **inputs: Any) -> T:
+        with run_scope(inputs) as run:
+            check_inputs(self._actions, run.inputs)
+            return reduce(lambda obj, action: action(obj), self._actions, obj)
 
     def __rshift__(self, other: Action[T]) -> "Flow[T]":
         if not callable(other):

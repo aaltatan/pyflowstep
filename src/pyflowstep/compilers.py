@@ -31,7 +31,7 @@ class FlowCompiler[T]:
     A flow definition is a list of `StepDict` objects, one per step, run in
     order. Every problem is reported while compiling, before anything runs:
     malformed dictionaries, unknown step names, bad arguments and failing
-    processors. Each error carries a note with its JSON path, e.g. `at $[2]`.
+    parsers. Each error carries a note with its JSON path, e.g. `at $[2]`.
 
     The compiler works on already-parsed data (lists and dicts), so where the
     definition comes from (a JSON file, a database, an API) is up to you.

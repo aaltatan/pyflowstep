@@ -1,14 +1,16 @@
 import json
-from typing import Any
+from typing import Annotated, Any
 
 import pytest
 
 from pyflowstep import (
+    Depends,
     Flow,
     FlowCompiler,
     InvalidFlowDefinitionError,
     MissingArgumentError,
-    ProcessArgumentError,
+    Parse,
+    ParseArgumentError,
     PyflowstepError,
     StepDoesNotExistError,
     StepsRegistry,
@@ -30,8 +32,8 @@ def multiply(total: float, factor: float = 2) -> float:
     return total * factor
 
 
-@calculator.step(processors={"places": int})
-def round_to(total: float, *, places: int) -> float:
+@calculator.step()
+def round_to(total: float, *, places: Annotated[int, Parse(int)]) -> float:
     return round(total, places)
 
 
@@ -78,7 +80,7 @@ class TestCompile:
     def test_accepts_tuples_of_steps(self, compiler: FlowCompiler[float]) -> None:
         assert compiler.compile(({"name": "add", "args": [1]},))(1) == 2
 
-    def test_processors_run_at_compile_time(self, compiler: FlowCompiler[float]) -> None:
+    def test_parsers_run_at_compile_time(self, compiler: FlowCompiler[float]) -> None:
         flow = compiler.compile([{"name": "round_to", "kwargs": {"places": "1"}}])
         assert flow(3.14159) == 3.1
 
@@ -171,7 +173,7 @@ class TestInvalidDefinitions:
             ({"name": "add", "args": [1, 2]}, TooManyArgumentsError),
             ({"name": "add", "args": [1], "kwargs": {"extra": 1}}, UnexpectedKeywordArgumentError),
             ({"name": "round_to", "args": [2]}, TooManyArgumentsError),
-            ({"name": "round_to", "kwargs": {"places": "two"}}, ProcessArgumentError),
+            ({"name": "round_to", "kwargs": {"places": "two"}}, ParseArgumentError),
         ],
     )
     def test_argument_errors_have_the_path(
@@ -216,3 +218,56 @@ class TestValidateStepDict:
     def test_invalid_definition_is_a_value_error(self) -> None:
         with pytest.raises(ValueError, match="a step must be an object"):
             validate_step_dict([])
+
+
+class TestDependencies:
+    """Dependencies are resolved when the compiled flow runs, never taken from JSON."""
+
+    @pytest.fixture
+    def setup(self) -> tuple[FlowCompiler[list[str]], list[int]]:
+        registry = StepsRegistry[list[str]]()
+        calls: list[int] = []
+
+        def get_stamp() -> str:
+            calls.append(1)
+            return f"run-{len(calls)}"
+
+        @registry.step()
+        def mark(items: list[str], label: str, stamp: str = Depends(get_stamp)) -> list[str]:
+            return [*items, f"{label}@{stamp}"]
+
+        return FlowCompiler(registry.steps), calls
+
+    def test_compiled_flow_shares_one_object_per_run(
+        self,
+        setup: tuple[FlowCompiler[list[str]], list[int]],
+    ) -> None:
+        compiler, calls = setup
+        flow = compiler.compile([{"name": "mark", "args": ["a"]}, {"name": "mark", "args": ["b"]}])
+
+        assert calls == []  # compiling calls no provider
+        assert flow([]) == ["a@run-1", "b@run-1"]
+        assert flow([]) == ["a@run-2", "b@run-2"]
+
+    @pytest.mark.parametrize(
+        ("item", "error"),
+        [
+            ({"name": "mark", "args": ["a", "mine"]}, TooManyArgumentsError),
+            (
+                {"name": "mark", "args": ["a"], "kwargs": {"stamp": "mine"}},
+                UnexpectedKeywordArgumentError,
+            ),
+        ],
+    )
+    def test_json_cannot_pass_a_dependency(
+        self,
+        setup: tuple[FlowCompiler[list[str]], list[int]],
+        item: Any,
+        error: type[PyflowstepError],
+    ) -> None:
+        compiler, _ = setup
+
+        with pytest.raises(error) as info:
+            compiler.compile([item])
+
+        assert info.value.__notes__ == ["at $[0]"]

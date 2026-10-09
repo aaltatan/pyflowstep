@@ -23,13 +23,22 @@ from examples.coffee import (
     top_with,
 )
 from examples.coffee import compiler as coffee_compiler
+from examples.dependencies import (
+    FULFILMENT,
+    Order,
+    Session,
+    fulfilment_steps,
+    get_mailer,
+    get_session,
+)
 from pyflowstep import (
     Flow,
     FlowCompiler,
-    ProcessArgumentError,
+    ParseArgumentError,
     StepDoesNotExistError,
     compose,
     get_flow_json_schema,
+    override_dependencies,
     step,
     tap,
 )
@@ -90,7 +99,7 @@ class TestBrowserAutomation:
             ],
         )
 
-        with pytest.raises(ProcessArgumentError, match="only https urls") as info:
+        with pytest.raises(ParseArgumentError, match="only https urls") as info:
             page_compiler.compile(json.loads(scenario))
 
         assert info.value.__notes__ == ["at $[1]"]
@@ -164,7 +173,7 @@ class TestCoffeeShop:
     def test_unknown_milk_is_rejected_when_the_menu_loads(self) -> None:
         recipe = [{"name": "brew", "args": ["drip"]}, {"name": "add_milk", "args": ["goat"]}]
 
-        with pytest.raises(ProcessArgumentError, match="'goat' is not a valid Milk") as info:
+        with pytest.raises(ParseArgumentError, match="'goat' is not a valid Milk") as info:
             coffee_compiler.compile(recipe)  # type: ignore[arg-type]
 
         assert info.value.__notes__ == ["at $[1]"]
@@ -252,3 +261,72 @@ class TestFlowsAreValues:
         aliases = {"inc": inc, "increment": inc, "plus_one": inc}
         flow = FlowCompiler[int](aliases).compile([{"name": name} for name in aliases])
         assert flow(0) == 3
+
+
+class RecordingMailer:
+    def __init__(self) -> None:
+        self.sent: list[tuple[str, str]] = []
+
+    def send(self, to: str, subject: str) -> None:
+        self.sent.append((to, subject))
+
+
+class TestExternalObjects:
+    """As a developer, my JSON flow uses a mailer and a session that JSON cannot describe."""
+
+    @pytest.fixture
+    def fulfil(self) -> Flow[Order]:
+        return FlowCompiler(fulfilment_steps.steps).compile(FULFILMENT)  # type: ignore[arg-type]
+
+    def test_steps_of_one_run_share_one_session(self, fulfil: Flow[Order]) -> None:
+        sessions: list[Session] = []
+
+        def get_recorded_session() -> Session:
+            sessions.append(Session())
+            return sessions[-1]
+
+        with override_dependencies(
+            {get_mailer: RecordingMailer, get_session: get_recorded_session}
+        ):
+            fulfil(Order("o-1", "ada@example.com", Decimal(50)))
+            fulfil(Order("o-2", "bob@example.com", Decimal(30)))
+
+        assert [session.rows for session in sessions] == [
+            ["order o-1", "audit o-1 fulfilled"],
+            ["order o-2", "audit o-2 fulfilled"],
+        ]
+
+    def test_the_mailer_is_replaced_by_a_fake_in_tests(self, fulfil: Flow[Order]) -> None:
+        mailer = RecordingMailer()
+
+        with override_dependencies({get_mailer: lambda: mailer}):
+            order = fulfil(Order("o-1", "ada@example.com", Decimal(50)))
+
+        assert order.status == "paid"
+        assert mailer.sent == [("ada@example.com", "receipt for order o-1 ($45.00)")]
+
+    def test_a_failed_run_rolls_the_session_back(
+        self,
+        fulfil: Flow[Order],
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        with pytest.raises(ValueError, match="nothing to charge"):
+            fulfil(Order("o-2", "bob@example.com", Decimal(0)))
+
+        assert capsys.readouterr().out.splitlines() == [
+            "  session opened",
+            "  session rolled back",
+            "  session closed",
+        ]
+
+    def test_the_stored_flow_never_mentions_the_objects(self) -> None:
+        assert "mailer" not in json.dumps(FULFILMENT)
+        assert "session" not in json.dumps(FULFILMENT)
+
+        schema = get_flow_json_schema(fulfilment_steps.steps)
+        arguments = {
+            name
+            for step_schema in schema["items"]["oneOf"]
+            for name in step_schema["properties"]["kwargs"]["properties"]
+        }
+        assert arguments == {"percent", "template", "action"}
