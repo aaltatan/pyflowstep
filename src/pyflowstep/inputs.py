@@ -43,7 +43,8 @@ from pyargprocessors import annotated_metadata, resolved_annotations
 
 from .exceptions import InvalidInputError, MissingInputError
 
-_REQUIRED_INPUTS = "__pyflowstep_inputs__"
+_INPUTS = "__pyflowstep_inputs__"
+_REQUIRED_OR_NOT = {True: "required (no default)", False: "optional (a default)"}
 
 
 class _Required:
@@ -171,10 +172,14 @@ def resolve_inputs(
     return {name: given.get(name, marker.default) for name, marker in inputs.items()}
 
 
-def mark_required_inputs(action: Callable[..., Any], inputs: Mapping[str, RunInput]) -> None:
-    """Record on a step action the inputs it requires, for `required_inputs` to read."""
-    required = frozenset(name for name, marker in inputs.items() if marker.required)
-    setattr(action, _REQUIRED_INPUTS, required)
+def mark_inputs(action: Callable[..., Any], inputs: Mapping[str, RunInput]) -> None:
+    """Record on a step action the inputs it takes, for `action_inputs` to read."""
+    setattr(action, _INPUTS, dict(inputs))
+
+
+def action_inputs(action: Callable[..., Any]) -> Mapping[str, RunInput]:
+    """Return the inputs an action takes, by name; plain callables take none."""
+    return getattr(action, _INPUTS, {})
 
 
 def required_inputs(action: Callable[..., Any]) -> frozenset[str]:
@@ -194,7 +199,7 @@ def required_inputs(action: Callable[..., Any]) -> frozenset[str]:
     ```
 
     """
-    return getattr(action, _REQUIRED_INPUTS, frozenset())
+    return frozenset(name for name, marker in action_inputs(action).items() if marker.required)
 
 
 def check_inputs(actions: Iterable[Callable[..., Any]], given: Mapping[str, Any]) -> None:
@@ -212,6 +217,51 @@ def check_inputs(actions: Iterable[Callable[..., Any]], given: Mapping[str, Any]
 
     if missing:
         raise MissingInputError(_missing_message(missing))
+
+
+def check_signature(actions: Iterable[Callable[..., Any]], fn: Callable[..., Any]) -> None:
+    """Raise if `fn` does not declare exactly the inputs of `actions`, see `Flow.signature`.
+
+    Raises:
+        InvalidInputError: If the subject is not positional-only, an input is not
+            keyword-only, or the inputs differ by name or by being required.
+
+    """
+    fn_name = getattr(fn, "__name__", repr(fn))
+    parameters = list(signature(fn).parameters.values())
+
+    if not parameters or parameters[0].kind is not Parameter.POSITIONAL_ONLY:
+        msg = (
+            f"Signature '{fn_name}' must take the subject as a positional-only first "
+            f"parameter: def {fn_name}(subject, /, *, <inputs>)"
+        )
+        raise InvalidInputError(msg)
+
+    if positional := [p.name for p in parameters[1:] if p.kind is not Parameter.KEYWORD_ONLY]:
+        msg = f"Signature '{fn_name}' must declare {positional} as keyword-only, after `*`"
+        raise InvalidInputError(msg)
+
+    expected: dict[str, bool] = {}
+    for action in actions:
+        for name, marker in action_inputs(action).items():
+            expected[name] = expected.get(name, False) or marker.required
+
+    # shortcut: names and required-ness only, annotations are not compared; compare them
+    # once forward references and subtyping have an agreed rule.
+    declared = {p.name: p.default is Parameter.empty for p in parameters[1:]}
+    problems = [
+        *(f"missing input '{name}'" for name in sorted(expected.keys() - declared.keys())),
+        *(f"unknown input '{name}'" for name in sorted(declared.keys() - expected.keys())),
+        *(
+            f"input '{name}' must be {_REQUIRED_OR_NOT[required]}"
+            for name, required in expected.items()
+            if name in declared and declared[name] != required
+        ),
+    ]
+
+    if problems:
+        msg = f"Signature '{fn_name}' does not match the flow: {'; '.join(problems)}"
+        raise InvalidInputError(msg)
 
 
 def _missing_message(missing: Iterable[tuple[str, str]]) -> str:

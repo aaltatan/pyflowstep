@@ -31,7 +31,7 @@ from pyargprocessors import InvalidProcessorError, find_processors, process_argu
 from .dependencies import Dependency, resolve_dependencies, run_scope, step_dependencies
 from .exceptions import InvalidStepError, to_argument_error
 from .flow import Flow, action_name
-from .inputs import RunInput, mark_required_inputs, resolve_inputs, step_inputs
+from .inputs import RunInput, mark_inputs, resolve_inputs, step_inputs
 
 type StepFn[T, **P] = Callable[Concatenate[T, P], T]
 type TapFn[T, **P] = Callable[Concatenate[T, P], Any]
@@ -152,7 +152,7 @@ def _make_step[T, **P](fn: TapFn[T, P], *, passthrough: bool) -> StepFactory[T, 
             else _call(fn, bound)
         )
         action = _make_action(call, fn, step_name, passthrough=passthrough)
-        mark_required_inputs(action, inputs)
+        mark_inputs(action, inputs)
         return Flow(action)
 
     factory.__signature__ = arguments_signature  # type: ignore[attr-defined]

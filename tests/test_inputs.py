@@ -1,5 +1,5 @@
 from inspect import signature
-from typing import Annotated
+from typing import Annotated, Any
 
 import pytest
 from pyargprocessors import InvalidProcessorError, Process
@@ -317,3 +317,46 @@ class TestInvalidDeclarations:
 
         with pytest.raises(InvalidDependencyError, match="cannot take the run input 'prefix'"):
             step(fn)
+
+
+class TestSignature:
+    def test_runs_the_flow_with_the_inputs(self) -> None:
+        @(prefixed("a") >> suffixed("b")).signature
+        def run(items: list[str], /, *, prefix: str, suffix: str = "") -> list[str]: ...
+
+        assert run([], prefix=">", suffix="!") == [">a", "b!"]
+        assert run([], prefix=">") == [">a", "b"]
+
+    def test_keeps_the_stub_signature(self) -> None:
+        def stub(items: list[str], /, *, prefix: str) -> list[str]: ...
+
+        assert signature(prefixed("a").signature(stub)) == signature(stub)
+
+    def test_input_required_by_any_step_is_required(self) -> None:
+        @step
+        def optional(items: list[str], prefix: str = Input(default="")) -> list[str]:
+            return items
+
+        with pytest.raises(InvalidInputError, match="'prefix' must be required"):
+
+            @(optional() >> prefixed("a")).signature
+            def run(items: list[str], /, *, prefix: str = "") -> list[str]: ...
+
+    @pytest.mark.parametrize(
+        ("stub", "match"),
+        [
+            (lambda items, /: items, "missing input 'prefix'"),
+            (lambda items, /, *, prefix, other: items, "unknown input 'other'"),
+            (lambda items, /, *, prefix="": items, "'prefix' must be required"),
+            (lambda items, prefix, /: items, r"\['prefix'\] as keyword-only"),
+            (lambda items, *, prefix: items, "positional-only first parameter"),
+            (lambda *, prefix: prefix, "positional-only first parameter"),
+        ],
+    )
+    def test_rejects_a_stub_that_does_not_match(self, stub: Any, match: str) -> None:
+        with pytest.raises(InvalidInputError, match=match):
+            prefixed("a").signature(stub)
+
+    def test_optional_input_must_have_a_default(self) -> None:
+        with pytest.raises(InvalidInputError, match="'suffix' must be optional"):
+            suffixed("a").signature(lambda items, /, *, suffix: items)
