@@ -671,14 +671,41 @@ login = compiler.compile(
 login(Page())
 ```
 
-The compiler takes already-parsed data. Reading JSON, YAML, a database row or an API payload is up to you:
+`compile` takes already-parsed data, so a database row or an API payload works too.
+
+### Flow files
+
+`compile_file` picks a parser by the file suffix. JSON and TOML are built in:
 
 ```python
-import json
-from pathlib import Path
-
-login = compiler.compile(json.loads(Path("login.json").read_text()))
+login = compiler.compile_file("login.json")  # a list of steps, as above
+login = compiler.compile_file("login.toml")
 ```
+
+A TOML flow lists its steps as `[[steps]]` tables:
+
+```toml
+[[steps]]
+name = "navigate"
+args = ["https://example.com/login"]
+
+[[steps]]
+name = "click"
+kwargs = { selector = "button[type=submit]" }
+```
+
+Add any other format by registering a parser that turns the file text into a list of steps:
+
+```python
+import yaml
+
+from pyflowstep import register_flow_format
+
+register_flow_format(".yaml", yaml.safe_load)
+register_flow_format(".yml", yaml.safe_load)
+```
+
+An unregistered suffix raises `UnsupportedFlowFormatError`; a file that does not parse raises `InvalidFlowDefinitionError`. Errors from a file carry an extra `in <path>` note. `load_flow_definition(path)` returns the parsed data without compiling it.
 
 Each step dictionary has this shape — only `name` is required:
 
@@ -695,7 +722,7 @@ at $[1]
 
 | Problem                                          | Exception                                              |
 | ------------------------------------------------ | ------------------------------------------------------ |
-| Not a list / malformed step dict                 | `InvalidFlowDefinitionError`                           |
+| Not a list / malformed step dict / bad file      | `InvalidFlowDefinitionError`                           |
 | Unknown or hidden step name                      | `StepDoesNotExistError` (lists the available steps)    |
 | Missing / extra / duplicated arguments           | `MissingArgumentError`, `TooManyArgumentsError`, ...   |
 | A processor rejects a value                      | `ProcessArgumentError` (from `pyargprocessors`)        |

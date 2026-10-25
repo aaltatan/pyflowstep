@@ -74,6 +74,16 @@ class InvalidFlowDefinitionError(PyflowstepError, ValueError):
     """Raised when a flow definition (a list of step dictionaries) is malformed."""
 
 
+class UnsupportedFlowFormatError(PyflowstepError, ValueError):
+    """Raised when a flow file has a suffix no parser is registered for."""
+
+    def __init__(self, suffix: str, supported: Iterable[str]) -> None:
+        super().__init__(
+            f"Unsupported flow file format '{suffix}'. "
+            f"Supported formats: {', '.join(sorted(supported)) or '(none)'}",
+        )
+
+
 class ArgumentError(PyflowstepError, TypeError):
     """Base class for errors caused by the arguments given to a step."""
 

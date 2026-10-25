@@ -1,7 +1,7 @@
 [project]
 name = "pyflowstep"
-version = "0.6.0"
-description = "A lightweight, typed Python library for composing functions into readable, reusable flows that can be defined as JSON."
+version = "0.7.0"
+description = "A lightweight, typed Python library for composing functions into readable, reusable flows that can be defined as JSON or TOML."
 readme = "README.md"
 authors = [
     { name = "aaltatan", email = "a.altatan@gmail.com" }
@@ -19,6 +19,7 @@ keywords = [
     "fluent-interface",
     "json",
     "json-schema",
+    "toml",
     "workflow",
     "dsl",
 ]

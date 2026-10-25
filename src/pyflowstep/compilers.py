@@ -1,5 +1,6 @@
-"""Compile flow definitions (lists of step dictionaries, or JSON) into `Flow` objects."""
+"""Compile flow definitions (lists of step dictionaries, or flow files) into `Flow` objects."""
 
+import os
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any, NotRequired, TypedDict
 
@@ -7,6 +8,7 @@ from pyargprocessors import PyargprocessorsError
 
 from .exceptions import InvalidFlowDefinitionError, PyflowstepError, StepDoesNotExistError
 from .flow import Flow, compose
+from .loaders import load_flow_definition
 
 _STEP_DICT_SHAPE = '{"name": str, "args"?: list, "kwargs"?: dict[str, Any]}'
 
@@ -37,6 +39,8 @@ class FlowCompiler[T]:
 
     The compiler works on already-parsed data (lists and dicts), so where the
     definition comes from (a JSON file, a database, an API) is up to you.
+    `compile_file` reads it from a JSON or TOML file (see `register_flow_format`
+    for other formats).
 
     Args:
         steps: A mapping from step name to step factory, typically
@@ -76,6 +80,15 @@ class FlowCompiler[T]:
         return compose(
             *(self._compile_step(item, f"$[{index}]") for index, item in enumerate(definition)),
         )
+
+    def compile_file(self, path: str | os.PathLike[str]) -> Flow[T]:
+        """Load a flow file (by suffix, e.g. `.json` or `.toml`) and compile it."""
+        definition = load_flow_definition(path)
+        try:
+            return self.compile(definition)
+        except (PyflowstepError, PyargprocessorsError) as error:
+            error.add_note(f"in {os.fspath(path)}")
+            raise
 
     def _compile_step(self, item: Any, path: str) -> Flow[T]:
         try:
