@@ -1,11 +1,11 @@
 """The `Flow` type: an immutable, composable pipeline of `T -> T` actions."""
 
 from collections.abc import Callable, Iterator
-from functools import reduce
-from typing import Any
+from functools import reduce, wraps
+from typing import Any, Concatenate
 
 from .dependencies import run_scope
-from .inputs import check_inputs, required_inputs
+from .inputs import check_inputs, check_signature, required_inputs
 
 type Action[T] = Callable[[T], T]
 
@@ -60,6 +60,40 @@ class Flow[T]:
         with run_scope(inputs) as run:
             check_inputs(self._actions, run.inputs)
             return reduce(lambda obj, action: action(obj), self._actions, obj)
+
+    def signature[**P](self, fn: Callable[Concatenate[T, P], T]) -> Callable[Concatenate[T, P], T]:
+        """Give the flow the call signature of `fn`, so type checkers check its run inputs.
+
+        Use it as a decorator on a stub that declares the subject positional-only
+        and every run input keyword-only. The stub must match the inputs of the
+        steps by name and by being required, or `InvalidInputError` is raised.
+
+        Example:
+        ```python
+        >>> from pyflowstep import Input, step
+        >>> @step
+        ... def add_tax(price: float, rate: float = Input(), bonus: float = Input(default=0.0)):
+        ...     return price * (1 + rate) + bonus
+        >>> @add_tax().signature
+        ... def taxed(price: float, /, *, rate: float, bonus: float = ...) -> float: ...
+        >>> taxed(100.0, rate=0.25)
+        125.0
+        >>> @add_tax().signature
+        ... def wrong(price: float, /) -> float: ...
+        Traceback (most recent call last):
+        ...
+        pyflowstep.exceptions.InvalidInputError: Signature 'wrong' does not match the flow: ...
+
+        ```
+
+        """
+        check_signature(self._actions, fn)
+
+        @wraps(fn)
+        def call(obj: T, /, *args: P.args, **kwargs: P.kwargs) -> T:  # noqa: ARG001
+            return self(obj, **kwargs)  # check_signature leaves no other positional parameter
+
+        return call
 
     def __rshift__(self, other: Action[T]) -> "Flow[T]":
         if not callable(other):

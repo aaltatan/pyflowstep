@@ -604,6 +604,19 @@ flow(page, credentials=credentials)
 # MissingInputError: missing run input 'voucher' for step 'fill_year'; run the flow as flow(subject, voucher=...)
 ```
 
+### Typed calls
+
+A flow is typed as `flow(obj, **inputs: Any)`, because Python's typing cannot merge the inputs of several steps into one signature. To have a type checker check the inputs, write the signature once as a stub and decorate it with `flow.signature`:
+
+```python
+@flow.signature
+def log_in_and_fill(page: Page, /, *, credentials: Credentials, voucher: Voucher) -> Page: ...
+
+log_in_and_fill(page, credentials=credentials)   # type checker: missing argument "voucher"
+```
+
+The subject is positional-only and every input keyword-only. Required inputs have no default; optional ones need one (`= ...` is fine), but the step's own default is what gets used. The stub is checked against the steps when it is decorated, and `InvalidInputError` names any input that is missing, unknown, or required when it should be optional (or the reverse). Types are not compared, only names. mypy reports a `...` body as `empty-body`; write `raise NotImplementedError` instead if that bothers you.
+
 ### Rules
 
 - **Invisible to JSON**, like a dependency: an input is absent from the JSON schema, cannot be processed, and passing one while building the flow raises `UnexpectedKeywordArgumentError` (or `TooManyArgumentsError`).
@@ -846,6 +859,7 @@ checkout = note_if(is_large(Decimal(100)), "needs approval") >> apply_tax(round(
 | `override_dependencies(mapping)`                             | context manager | Replace providers inside a `with` block, for tests        |
 | `Input(default=...)`                                         | marker    | Receive a parameter from the caller of the flow, `flow(subject, name=value)`, see [Run inputs](#run-inputs) |
 | `Flow.inputs`                                                | property  | The names of the inputs a flow requires                         |
+| `Flow.signature(stub)`                                       | decorator | Give a flow a typed call signature, checked against its inputs, see [Typed calls](#typed-calls) |
 | `FlowCompiler[T](steps)`                                     | class     | `compile(definition)` turns parsed step dicts into a flow       |
 | `validate_step_dict(item, path)`                             | function  | Validate one step dictionary                                    |
 | `get_json_schema(annotation)`                                | function  | JSON Schema of a type annotation                                |
