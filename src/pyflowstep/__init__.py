@@ -18,7 +18,8 @@ functions and compose them with `>>`:
 ```
 
 Steps collected in a `StepsRegistry` can also be described as JSON
-(`get_flow_json_schema`) and compiled from JSON (`FlowCompiler`).
+(`get_flow_json_schema`) and compiled from JSON or TOML files (`FlowCompiler`);
+`register_flow_format` adds other file formats.
 
 Raw JSON values become typed arguments with the `Process` marker of
 `pyargprocessors`, written next to the parameter:
@@ -53,10 +54,12 @@ from .exceptions import (
     StepDoesNotExistError,
     TooManyArgumentsError,
     UnexpectedKeywordArgumentError,
+    UnsupportedFlowFormatError,
 )
 from .flow import Action, Flow, compose
 from .inputs import Input
 from .json_schema import get_flow_json_schema, get_json_schema, get_step_json_schema
+from .loaders import FlowParser, load_flow_definition, register_flow_format
 from .registry import StepsRegistry
 from .steps import StepFactory, StepFn, TapFn, step, tap
 
@@ -67,6 +70,7 @@ __all__ = [
     "Flow",
     "FlowCompiler",
     "FlowDefinition",
+    "FlowParser",
     "Input",
     "InvalidDependencyError",
     "InvalidFlowDefinitionError",
@@ -87,11 +91,14 @@ __all__ = [
     "TapFn",
     "TooManyArgumentsError",
     "UnexpectedKeywordArgumentError",
+    "UnsupportedFlowFormatError",
     "compose",
     "get_flow_json_schema",
     "get_json_schema",
     "get_step_json_schema",
+    "load_flow_definition",
     "override_dependencies",
+    "register_flow_format",
     "step",
     "tap",
     "validate_step_dict",
