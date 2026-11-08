@@ -10,6 +10,7 @@ license = "GPL-3.0-only"
 requires-python = ">=3.12"
 dependencies = [
     "pyargprocessors>=0.1.0",
+    "pyvocabulary>=0.1.0",
 ]
 keywords = [
     "flow",
@@ -93,3 +94,7 @@ extend-immutable-calls = [
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S101", "PLR2004", "ANN", "ARG", "INP001", "E501"]
 "examples/**" = ["T201", "INP001"]
+
+[tool.uv.sources]
+# the sibling checkout in ~/dev until pyvocabulary is published on PyPI
+pyvocabulary = { path = "../pyvocabulary", editable = true }

@@ -5,9 +5,11 @@ from functools import wraps
 from types import MappingProxyType
 from typing import Any
 
+from pyvocabulary import Vocabulary
+
 from .exceptions import StepAlreadyRegisteredError, StepDoesNotExistError
 from .steps import StepFactory, StepFn, TapFn, step, tap
-from .validators import validate_step_name
+from .validators import _invalid_step_name, validate_step_name
 
 
 class StepsRegistry[T]:
@@ -40,29 +42,29 @@ class StepsRegistry[T]:
     """
 
     def __init__(self) -> None:
-        self._steps: dict[str, StepFactory[T, ...]] = {}
-        self._hidden: set[str] = set()
+        self._steps: Vocabulary[StepFactory[T, ...]] = Vocabulary(
+            "step",
+            does_not_exist=StepDoesNotExistError,
+            already_registered=StepAlreadyRegisteredError,
+            invalid_name=_invalid_step_name,
+        )
 
     @property
     def steps(self) -> Mapping[str, StepFactory[T, ...]]:
         """A read-only mapping of every visible step, by name."""
-        return MappingProxyType(
-            {name: factory for name, factory in self._steps.items() if name not in self._hidden},
-        )
+        return MappingProxyType(dict(self._steps))
 
     def __getitem__(self, name: str) -> StepFactory[T, ...]:
-        if name not in self.steps:
-            raise StepDoesNotExistError(name, self.steps.keys())
         return self._steps[name]
 
     def __contains__(self, name: object) -> bool:
-        return name in self.steps
+        return name in self._steps
 
     def __iter__(self) -> Iterator[str]:
-        return iter(self.steps)
+        return iter(self._steps)
 
     def __len__(self) -> int:
-        return len(self.steps)
+        return len(self._steps)
 
     def step[**P](
         self,
@@ -156,18 +158,14 @@ class StepsRegistry[T]:
         """
         step_name = validate_step_name(name or getattr(fn, "__name__", ""))
 
-        if step_name in self._steps:
+        if self._steps.is_registered(step_name):
             raise StepAlreadyRegisteredError(step_name)
 
         make = tap if passthrough else step
         factory = make(_renamed(fn, step_name))
         factory.__doc__ = description or fn.__doc__
 
-        self._steps[step_name] = factory
-        if hidden:
-            self._hidden.add(step_name)
-
-        return factory
+        return self._steps.add(step_name, factory, hidden=hidden)
 
 
 def _renamed[F: Callable[..., Any]](fn: F, name: str) -> F:

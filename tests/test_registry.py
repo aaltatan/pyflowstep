@@ -274,3 +274,11 @@ class TestRegistryProcessing:
             return n * 2
 
         assert registry.register(double).__wrapped__ is double  # type: ignore[attr-defined]
+
+
+class TestStepNameValidation:
+    def test_trailing_newline_is_rejected(self):
+        # `re.match` with `$` used to accept "push\n"; pyvocabulary uses `fullmatch`.
+        registry = StepsRegistry[list[str]]()
+        with pytest.raises(InvalidStepNameError, match="Invalid step name"):
+            registry.register(lambda stack: stack, name="push\n")
