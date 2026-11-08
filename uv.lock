@@ -202,7 +202,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "pyargprocessors", specifier = ">=0.1.0" },
-    { name = "pyvocabulary", editable = "../pyvocabulary" },
+    { name = "pyvocabulary", specifier = ">=0.1.0" },
 ]
 
 [package.metadata.requires-dev]
@@ -298,18 +298,13 @@ wheels = [
 [[package]]
 name = "pyvocabulary"
 version = "0.1.0"
-source = { editable = "../pyvocabulary" }
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pyargprocessors" },
 ]
-
-[package.metadata]
-requires-dist = [{ name = "pyargprocessors", specifier = ">=0.1.0" }]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "pytest", specifier = ">=9.1.1" },
-    { name = "pytest-cov", specifier = ">=6.0" },
+sdist = { url = "https://files.pythonhosted.org/packages/55/a4/153920819ca152eb93b883c817cb72ee6f6f8142144005958abe73496f03/pyvocabulary-0.1.0.tar.gz", hash = "sha256:13da4cba2e05520363cb44855ca6e298575f8aed1ce38304cffdf8d5fd0d2da8", size = 9308, upload-time = "2026-11-08T03:59:47.697Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/43/c5/a5eb81e340e2aeb526b190ccd7b4b55dd974cabc64481b4e1b8628e5e171/pyvocabulary-0.1.0-py3-none-any.whl", hash = "sha256:685ee34032ab319768c1a447879763d4820eda700fed16ed47c69f8107998e4b", size = 10873, upload-time = "2026-11-08T03:59:45.894Z" },
 ]
 
 [[package]]
