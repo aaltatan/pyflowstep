@@ -7,4 +7,4 @@
 
 ## Next
 - [x] Not reproducible on Python 3.12.15 (passes on `main` and `refactor/pyvocabulary`, 2026-11-08). Original report: `tests/test_steps.py::TestArgumentValidation::test_positional_only_passed_by_keyword` it fails on `main` because 3.12 says "positional only" instead of "positional-only" (`requires-python` is `>=3.12`)
-- [ ] Add Python 3.12 to CI so this cannot regress (there is no CI workflow yet; create one)
+- [x] Add Python 3.12 to CI so this cannot regress (`.github/workflows/ci.yml`: ruff, pyright, pytest with coverage on 3.12 and 3.13)

@@ -95,3 +95,7 @@ extend-immutable-calls = [
 "tests/**" = ["S101", "PLR2004", "ANN", "ARG", "INP001", "E501"]
 "examples/**" = ["T201", "INP001"]
 
+
+[tool.pyright]
+venvPath = "."
+venv = ".venv"
