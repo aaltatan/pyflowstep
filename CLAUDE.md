@@ -83,11 +83,11 @@ Paste this into a new Claude conversation linked to this computer:
 > Python 3.12 and 3.13, tick what you finish in `PHASES.md`, and commit. Do not push or
 > publish. When done, summarise what changed and what the next unchecked item is.
 
-## Active plan (not started)
+## Done: step variants, chains and outputs (2026-11-08)
 
-Agreed design, written down so the work can continue on another machine. Nothing below is
-implemented yet. Start here: add its three items to `PHASES.md`, then follow "How to work here".
-Do not bump the version unless asked.
+Implemented on branch `feat/step-variants` (three commits, all three items ticked in
+`PHASES.md`, documented in `README.md`). Not pushed, version not bumped. The design below is
+kept as the record of what was agreed and why; do not start it again.
 
 ### Step variants, registered chains and step outputs
 
