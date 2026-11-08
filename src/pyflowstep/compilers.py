@@ -4,6 +4,7 @@ from collections.abc import Callable, Mapping, Sequence
 from typing import Any, NotRequired, TypedDict
 
 from pyargprocessors import PyargprocessorsError
+from pyvocabulary import located
 
 from .exceptions import InvalidFlowDefinitionError, PyflowstepError, StepDoesNotExistError
 from .flow import Flow, compose
@@ -78,13 +79,10 @@ class FlowCompiler[T]:
         )
 
     def _compile_step(self, item: Any, path: str) -> Flow[T]:
-        try:
+        with located(path, PyflowstepError, PyargprocessorsError):
             step_dict = validate_step_dict(item, path)
             factory = self._find_step(step_dict["name"])
             return factory(*step_dict.get("args", []), **step_dict.get("kwargs", {}))
-        except (PyflowstepError, PyargprocessorsError) as error:
-            error.add_note(f"at {path}")
-            raise
 
     def _find_step(self, name: str) -> Callable[..., Flow[T]]:
         if name not in self._steps:

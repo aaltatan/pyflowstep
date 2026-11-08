@@ -1,4 +1,4 @@
-import re
+from pyvocabulary import validate_name
 
 from .exceptions import InvalidStepNameError
 
@@ -18,12 +18,12 @@ def validate_step_name(name: str) -> str:
     ```
 
     """
-    if not isinstance(name, str) or not re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$").match(name):
-        msg = (
-            f"Invalid step name: {name!r}, "
-            "you should follow the python variable naming convention: "
-            "name must start with a letter and can only contain letters, numbers and underscores"
-        )
-        raise InvalidStepNameError(msg)
+    return validate_name(name, error=_invalid_step_name)
 
-    return name
+
+def _invalid_step_name(name: object) -> InvalidStepNameError:
+    return InvalidStepNameError(
+        f"Invalid step name: {name!r}, "
+        "you should follow the python variable naming convention: "
+        "name must start with a letter and can only contain letters, numbers and underscores"
+    )

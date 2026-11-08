@@ -10,8 +10,9 @@ Argument processing belongs to `pyargprocessors`, which raises its own
 derive from `PyargprocessorsError` instead of `PyflowstepError`.
 """
 
-import re
 from collections.abc import Iterable
+
+from pyvocabulary import BindProblem, bind_problem
 
 
 class PyflowstepError(Exception):
@@ -98,13 +99,13 @@ class PositionalOnlyArgumentError(ArgumentError):
     """Raised when a positional-only step argument is passed as a keyword."""
 
 
-_ARGUMENT_ERROR_PATTERNS: tuple[tuple[str, type[ArgumentError]], ...] = (
-    (r"positional.only.*passed as (a )?keyword", PositionalOnlyArgumentError),
-    (r"missing a required", MissingArgumentError),
-    (r"too many positional arguments", TooManyArgumentsError),
-    (r"got an unexpected keyword argument", UnexpectedKeywordArgumentError),
-    (r"multiple values for argument", MultipleValuesArgumentError),
-)
+_ARGUMENT_ERRORS: dict[BindProblem, type[ArgumentError]] = {
+    "positional_only": PositionalOnlyArgumentError,
+    "missing": MissingArgumentError,
+    "too_many": TooManyArgumentsError,
+    "unexpected_keyword": UnexpectedKeywordArgumentError,
+    "multiple_values": MultipleValuesArgumentError,
+}
 
 
 def to_argument_error(error: TypeError, step_name: str) -> ArgumentError:
@@ -121,9 +122,6 @@ def to_argument_error(error: TypeError, step_name: str) -> ArgumentError:
     ```
 
     """
-    message = str(error)
-    error_type = next(
-        (error for pattern, error in _ARGUMENT_ERROR_PATTERNS if re.search(pattern, message)),
-        ArgumentError,
-    )
-    return error_type(f"{message} for step '{step_name}'")
+    problem = bind_problem(error)
+    error_type = ArgumentError if problem is None else _ARGUMENT_ERRORS[problem]
+    return error_type(f"{error} for step '{step_name}'")
