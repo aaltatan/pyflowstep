@@ -8,7 +8,7 @@ from typing import Any
 from pyvocabulary import Vocabulary
 
 from .exceptions import StepAlreadyRegisteredError, StepDoesNotExistError
-from .steps import StepFactory, StepFn, TapFn, step, tap
+from .steps import StepFactory, StepFn, TapFn, override, step, tap
 from .validators import _invalid_step_name, validate_step_name
 
 
@@ -156,16 +156,76 @@ class StepsRegistry[T]:
             InvalidStepError: If `fn` does not accept the subject positionally.
 
         """
+        return self._add(
+            fn,
+            tap if passthrough else step,
+            name=name,
+            description=description,
+            hidden=hidden,
+        )
+
+    def override[**P](
+        self,
+        original: StepFactory[T, ...],
+        /,
+        *,
+        name: str | None = None,
+        description: str | None = None,
+        hidden: bool = False,
+    ) -> Callable[[TapFn[T, P]], StepFactory[T, P]]:
+        """Return a decorator registering a variant of a step, see `pyflowstep.override`.
+
+        Args:
+            original: The step factory whose body the variant runs.
+            name: The step name; defaults to the stub name.
+            description: Overrides the docstring of the stub, or of `original`
+                when the stub has none (shown in the JSON schema).
+            hidden: Keep the step out of the registry lookups (`steps`, `[]`, `in`),
+                hence out of the compiler and the JSON schema. The returned
+                factory stays fully usable from Python.
+
+        Example:
+        ```python
+        >>> from pyflowstep import Input
+        >>> registry = StepsRegistry[int]()
+        >>> @registry.step()
+        ... def add(total: int, amount: int) -> int:
+        ...     return total + amount
+        >>> @registry.override(registry["add"], name="add_input")
+        ... def add_from_run(total: int, amount: int = Input()) -> int: ...
+        >>> registry["add_input"]()(1, amount=2)
+        3
+
+        ```
+
+        """
+        make = override(original)
+
+        def decorator(fn: TapFn[T, P]) -> StepFactory[T, P]:
+            return self._add(fn, make, name=name, description=description, hidden=hidden)
+
+        return decorator
+
+    def _add[F: Callable[..., Any], **P](
+        self,
+        fn: F,
+        make: Callable[[F], StepFactory[T, P]],
+        *,
+        name: str | None,
+        description: str | None,
+        hidden: bool,
+    ) -> StepFactory[T, P]:
+        """Validate the name, build the factory with `make` under that name, and add it."""
         step_name = validate_step_name(name or getattr(fn, "__name__", ""))
 
         if self._steps.is_registered(step_name):
             raise StepAlreadyRegisteredError(step_name)
 
-        make = tap if passthrough else step
         factory = make(_renamed(fn, step_name))
-        factory.__doc__ = description or fn.__doc__
+        factory.__doc__ = description or factory.__doc__
+        self._steps.add(step_name, factory, hidden=hidden)
 
-        return self._steps.add(step_name, factory, hidden=hidden)
+        return factory
 
 
 def _renamed[F: Callable[..., Any]](fn: F, name: str) -> F:

@@ -22,20 +22,38 @@ Naming steps is a registry concern, see `StepsRegistry`.
 """
 
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from functools import wraps
 from inspect import BoundArguments, Parameter, Signature, signature
 from typing import Any, Concatenate
 
 from pyargprocessors import InvalidProcessorError, find_processors, process_arguments
 
-from .dependencies import Dependency, resolve_dependencies, run_scope, step_dependencies
+from .dependencies import (
+    Dependency,
+    find_dependencies,
+    resolve_dependencies,
+    run_scope,
+    step_dependencies,
+)
 from .exceptions import InvalidStepError, to_argument_error
 from .flow import Flow, action_name
-from .inputs import RunInput, mark_inputs, resolve_inputs, step_inputs
+from .inputs import RunInput, find_inputs, mark_inputs, resolve_inputs, step_inputs
 
 type StepFn[T, **P] = Callable[Concatenate[T, P], T]
 type TapFn[T, **P] = Callable[Concatenate[T, P], Any]
 type StepFactory[T, **P] = Callable[P, Flow[T]]
+
+_ORIGIN = "__pyflowstep_origin__"
+
+
+@dataclass(frozen=True, slots=True)
+class _Origin:
+    """What a step factory runs, recorded so `override` can reuse it."""
+
+    body: Callable[..., Any]
+    passthrough: bool
+    output: str | None
 
 
 def step[T, **P](fn: StepFn[T, P], /) -> StepFactory[T, P]:
@@ -97,6 +115,65 @@ def tap[T, **P](fn: TapFn[T, P], /) -> StepFactory[T, P]:
     return _make_step(fn, passthrough=True)
 
 
+def override[T, **P](
+    original: StepFactory[T, ...],
+    /,
+) -> Callable[[TapFn[T, P]], StepFactory[T, P]]:
+    """Make a variant of a step: same body and parameters, other defaults.
+
+    The decorated function is a stub whose body never runs; the body of
+    `original` does. The stub gives the variant its name, its arguments and
+    their markers: a parameter can become `Input()`, `Depends(...)` or get
+    another plain default. Whether the step is a `step`, a `tap` or an
+    `output` carries over from `original`. The docstring is the stub's, or the
+    original's when the stub has none.
+
+    A stub is used because a type checker cannot express "the same parameters
+    with one default changed" from `original` alone.
+
+    Raises:
+        InvalidStepError: If `original` is not a step factory, the parameters after
+            the subject differ in name, order or kind, or a parameter that is
+            processed on `original` is neither processed nor injected on the stub.
+
+    Example:
+    ```python
+    >>> from pyflowstep import Input, step
+    >>> @step
+    ... def add(total: int, amount: int) -> int:
+    ...     return total + amount
+    >>> @override(add)
+    ... def add_input(total: int, amount: int = Input()) -> int: ...
+    >>> add_input()(1, amount=2)
+    3
+
+    ```
+
+    """
+    origin: _Origin | None = getattr(original, _ORIGIN, None)
+
+    if origin is None:
+        msg = (
+            f"'{action_name(original)}' is not a step factory; override takes a factory made "
+            "by step, tap, output or a StepsRegistry"
+        )
+        raise InvalidStepError(msg)
+
+    def decorator(stub: TapFn[T, P]) -> StepFactory[T, P]:
+        _check_override(original, stub)
+        factory = _make_step(
+            stub,
+            passthrough=origin.passthrough,
+            body=origin.body,
+            output=origin.output,
+        )
+        factory.__doc__ = stub.__doc__ or original.__doc__
+
+        return factory
+
+    return decorator
+
+
 def bind_arguments(
     arguments_signature: Signature,
     step_name: str,
@@ -124,7 +201,15 @@ def bind_arguments(
         raise to_argument_error(error, step_name) from error
 
 
-def _make_step[T, **P](fn: TapFn[T, P], *, passthrough: bool) -> StepFactory[T, P]:
+def _make_step[T, **P](
+    fn: TapFn[T, P],
+    *,
+    passthrough: bool,
+    body: Callable[..., Any] | None = None,
+    output: str | None = None,
+) -> StepFactory[T, P]:
+    """Return the factory of a step whose signature data comes from `fn` and runs `body or fn`."""
+    run = body or fn
     step_name = action_name(fn)
     full_signature = _arguments_signature(fn, step_name)
     dependencies = step_dependencies(fn, step_name)
@@ -146,17 +231,55 @@ def _make_step[T, **P](fn: TapFn[T, P], *, passthrough: bool) -> StepFactory[T, 
     def factory(*args: P.args, **kwargs: P.kwargs) -> Flow[T]:
         bound = bind_arguments(arguments_signature, step_name, args, kwargs)
         bound = process_arguments(processors, bound) if processors else bound
+        # `run` may be another function (override): hand it every value, never its own defaults
+        bound.apply_defaults()
         call = (
-            _inject(fn, step_name, full_signature, bound, dependencies=dependencies, inputs=inputs)
+            _inject(run, step_name, full_signature, bound, dependencies=dependencies, inputs=inputs)
             if injected
-            else _call(fn, bound)
+            else _call(run, bound)
         )
         action = _make_action(call, fn, step_name, passthrough=passthrough)
         mark_inputs(action, inputs)
+
         return Flow(action)
 
     factory.__signature__ = arguments_signature  # type: ignore[attr-defined]
+    setattr(factory, _ORIGIN, _Origin(run, passthrough, output))
+
     return factory
+
+
+def _check_override(original: Callable[..., Any], stub: Callable[..., Any]) -> None:
+    """Raise if `stub` cannot stand in for the signature of `original`, see `override`."""
+    stub_name = action_name(stub)
+    original_name = action_name(original)
+    spec = original.__wrapped__  # type: ignore[attr-defined]  # the function its signature came from
+    expected = _arguments_signature(spec, original_name).parameters.values()
+    given = _arguments_signature(stub, stub_name).parameters.values()
+
+    if [(p.name, p.kind) for p in expected] != [(p.name, p.kind) for p in given]:
+        msg = (
+            f"Override '{stub_name}' must keep the parameters of '{original_name}' after the "
+            f"subject, with the same names, order and kinds: expected {_describe(expected)}, "
+            f"got {_describe(given)}"
+        )
+        raise InvalidStepError(msg)
+
+    processed = find_processors(spec, name=original_name, skip=1).keys()
+    kept = find_processors(stub, name=stub_name, skip=1).keys()
+    injected = find_dependencies(stub).keys() | find_inputs(stub).keys()
+
+    if lost := sorted(processed - kept - injected):
+        names = ", ".join(f"'{name}'" for name in lost)
+        msg = (
+            f"Override '{stub_name}' drops the Process of {names} from '{original_name}'; "
+            "repeat the Annotated[..., Process(...)] on the stub, or inject the parameter"
+        )
+        raise InvalidStepError(msg)
+
+
+def _describe(parameters: Any) -> str:
+    return "(" + ", ".join(f"{p.name}: {p.kind.description}" for p in parameters) + ")"
 
 
 def _arguments_signature(fn: Callable[..., Any], step_name: str) -> Signature:

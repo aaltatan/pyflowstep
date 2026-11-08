@@ -182,6 +182,188 @@ def click(page: Page, selector: str) -> None:
     page.click(selector)
 ```
 
+### override
+
+A variant of a step keeps the step's body and parameters but changes a default: a value that used to be an argument now comes from whoever runs the flow, from a provider, or from a fixed default. Write the variant as a stub with the same parameters and decorate it with `override(original)`. The stub's body never runs; the original's does.
+
+```python
+from pyflowstep import Depends, Input, override, step
+
+
+@step
+def fill(form: dict, selector: str, *, value: str) -> dict:
+    """Type a value into a field."""
+    return {**form, selector: value}
+
+
+@override(fill)
+def fill_from_run(form: dict, selector: str, *, value: str = Input()) -> dict: ...
+
+
+flow = fill_from_run("#date")
+flow.inputs                     # frozenset({'value'})
+flow({}, value="2026-11-08")    # {'#date': '2026-11-08'}
+```
+
+Any default can change. A parameter can become `Depends(...)` or get a plain default, and an `Input()` of the original can become an ordinary argument:
+
+```python
+def today() -> str:
+    return "2026-11-08"
+
+
+@override(fill)
+def fill_today(form: dict, selector: str, *, value: str = Depends(today)) -> dict: ...
+
+
+@override(fill)
+def fill_blank(form: dict, selector: str, *, value: str = "") -> dict: ...
+
+
+fill_today("#date")({})               # {'#date': '2026-11-08'}
+fill_blank("#note")({})               # {'#note': ''}
+fill_blank("#note", value="hi")({})   # {'#note': 'hi'}
+
+
+@step
+def greet(lines: list, name: str = Input()) -> list:
+    return [*lines, f"Hello {name}"]
+
+
+@override(greet)
+def greet_name(lines: list, name: str) -> list: ...
+
+
+greet_name("Ada")([])   # ['Hello Ada']
+```
+
+The kind of step carries over: an override of a `tap` ignores the return value too, and an override of an [`output`](#outputs) still stores its value.
+
+```python
+@tap
+def log(form: dict, message: str) -> None:
+    print(message, form)
+
+
+@override(log)
+def log_saved(form: dict, message: str = "saved") -> None: ...
+
+
+log_saved()({"#a": "1"})   # prints "saved {'#a': '1'}", returns {'#a': '1'}
+```
+
+**Several variants in one flow** share an input when they keep the parameter name, because the name of an input is the name of its parameter. `override` does not rename parameters. For separate inputs, write a step whose one-line body calls the original:
+
+```python
+(fill_from_run("#from") >> fill_from_run("#to"))({}, value="2026-01-01")
+# {'#from': '2026-01-01', '#to': '2026-01-01'}
+
+
+@step
+def fill_to(form: dict, selector: str, *, to: str = Input()) -> dict:
+    return fill(selector, value=to)(form)
+
+
+(fill_from_run("#from") >> fill_to("#to"))({}, value="2026-01-01", to="2026-12-31")
+# {'#from': '2026-01-01', '#to': '2026-12-31'}
+```
+
+**Markers come from the stub**, so `Process` is kept only when the stub repeats it. A value that arrives through `Input` is passed as given, never processed. Dropping a `Process` without injecting the parameter is an error, because the conversion would silently disappear:
+
+```python
+@step
+def repeat(lines: list, word: str, times: Annotated[int, Process(int)]) -> list:
+    return [*lines, *[word] * times]
+
+
+@override(repeat)
+def twice(lines: list, word: str, times: Annotated[int, Process(int)] = 2) -> list: ...
+
+
+@override(repeat)
+def repeat_from_run(lines: list, word: str, times: int = Input()) -> list: ...
+
+
+twice("hi", "3")([])                 # ['hi', 'hi', 'hi']
+repeat_from_run("hi")([], times=2)   # ['hi', 'hi']  (times="2" would reach the body as a string)
+```
+
+**Docstring and name.** The stub's docstring is used, or the original's when the stub has none. The stub's name is the step name, shown in `repr` and errors. An override of an override runs the first real body:
+
+```python
+fill_blank.__doc__   # 'Type a value into a field.'
+
+
+@override(fill)
+def fill_date(form: dict, selector: str = "#date", *, value: str) -> dict:
+    """Type the date of the voucher."""
+
+
+@override(fill_date)
+def fill_today_date(form: dict, selector: str = "#date", *, value: str = Depends(today)) -> dict: ...
+
+
+fill_date.__doc__       # 'Type the date of the voucher.'
+fill_today_date()({})   # {'#date': '2026-11-08'}
+fill_from_run()         # MissingArgumentError: missing a required argument: 'selector' for step 'fill_from_run'
+```
+
+**In a registry**, `registry.override(original, name=, description=, hidden=)` registers the variant, so JSON can use it:
+
+```python
+steps = StepsRegistry[dict]()
+
+
+@steps.step()
+def fill(form: dict, selector: str, *, value: str) -> dict:
+    """Type a value into a field."""
+    return {**form, selector: value}
+
+
+@steps.override(steps["fill"], name="fill_date", description="Type the voucher date.")
+def fill_voucher_date(form: dict, selector: str = "#date", *, value: str = Input()) -> dict: ...
+
+
+@steps.override(steps["fill"], hidden=True)
+def fill_debug(form: dict, selector: str = "#debug", *, value: str = "on") -> dict: ...
+
+
+flow = FlowCompiler(steps.steps).compile([{"name": "fill_date"}])
+flow                           # Flow(fill_date)
+flow({}, value="2026-11-08")   # {'#date': '2026-11-08'}
+list(steps.steps)              # ['fill', 'fill_date']
+```
+
+In the JSON schema, `fill_date` takes only `selector` (default `"#date"`) and is described as "Type the voucher date.". `value` is a run input, so it is absent, like every input.
+
+**Errors** are all raised when the stub is decorated:
+
+```python
+override(plain)
+# InvalidStepError: 'plain' is not a step factory; override takes a factory made by step, tap, output or a StepsRegistry
+
+@override(fill)
+def fill_x(form: dict, field: str, *, value: str = Input()) -> dict: ...
+# InvalidStepError: Override 'fill_x' must keep the parameters of 'fill' after the subject, with the same
+# names, order and kinds: expected (selector: positional or keyword, value: keyword-only),
+# got (field: positional or keyword, value: keyword-only)
+
+@override(repeat)
+def thrice(lines: list, word: str, times: int = 3) -> list: ...
+# InvalidStepError: Override 'thrice' drops the Process of 'times' from 'repeat'; repeat the
+# Annotated[..., Process(...)] on the stub, or inject the parameter
+
+@override(pos)  # def pos(form: dict, selector: str, /) -> dict
+def pos_input(form: dict, selector: str = Input(), /) -> dict: ...
+# InvalidInputError: Step 'pos_input' cannot take positional-only parameter 'selector' as a run input
+
+@steps.override(steps["fill"], name="fill_date")
+def again(form: dict, selector: str, *, value: str = "") -> dict: ...
+# StepAlreadyRegisteredError: Step 'fill_date' is already registered.
+```
+
+**Why a stub.** Python's typing cannot say "the parameters of `fill`, with `value` now optional", so the variant spells them out. In return the type checker sees the real signature, `(selector: str, *, value: str = Input()) -> Flow[dict]`, and checks every call of the variant. The parameters must match the original by name, order and kind. Only defaults and annotations may change.
+
 ---
 
 ## Registry
@@ -229,6 +411,7 @@ page_steps.register(lambda page: page, name="noop")  # register without a decora
 | `step(name=, description=, hidden=)`                             | Decorator for `(subject, ...) -> subject` functions         |
 | `tap(name=, description=, hidden=)`                              | Decorator for side-effect functions (return value ignored)  |
 | `register(fn, *, name=, description=, hidden=, passthrough=)`    | Register without decorator syntax                           |
+| `override(original, name=, description=, hidden=)`               | Decorator registering a variant of a step, see [override](#override) |
 | `steps`                                                          | Read-only mapping of visible steps                          |
 | `registry[name]`, `name in registry`, `len()`, iteration         | Lookup over visible steps                                   |
 
@@ -880,6 +1063,7 @@ checkout = note_if(is_large(Decimal(100)), "needs approval") >> apply_tax(round(
 | `Flow[T]`                                                    | class     | Immutable, callable sequence of actions; composes with `>>`     |
 | `compose(*actions)`                                          | function  | Combine actions and flows into one flat flow                    |
 | `step` / `tap`                                               | decorator | Turn a function into a step factory                             |
+| `override(original)`                                         | decorator | A variant of a step with other defaults, see [override](#override) |
 | `StepsRegistry[T]`                                           | class     | Named collection of steps                                       |
 | `pyargprocessors.Process(fn)`                                | marker    | Apply `fn` to the value passed for a parameter, see [Processing arguments](#processing-arguments) |
 | `Depends(provider)`                                          | marker    | Inject a parameter by calling `provider`, see [Dependencies](#dependencies) |
