@@ -159,7 +159,7 @@ class TestGetStepJsonSchema:
 
     def test_var_positional_and_var_keyword(self) -> None:
         properties = get_step_json_schema("press", press)["properties"]
-        assert properties["args"]["prefixItems"] == []
+        assert "prefixItems" not in properties["args"]
         assert properties["args"]["items"] == {"type": "string"}
         assert properties["kwargs"]["properties"] == {}
         assert properties["kwargs"]["additionalProperties"] == {"type": "boolean"}
