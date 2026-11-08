@@ -174,6 +174,65 @@ def override[T, **P](
     return decorator
 
 
+def chain[T, **P](fn: Callable[P, Flow[T]], /) -> StepFactory[T, P]:
+    """Turn a function that builds a flow from other steps into a step factory.
+
+    Every parameter of `fn` is a build argument; there is no subject. The
+    factory binds and processes its arguments like a step factory does, so
+    mistakes raise the same `ArgumentError`s, and the flow `fn` returns stays
+    flat: the `Input`s of its steps are inputs of any flow it joins.
+
+    Raises:
+        InvalidStepError: If a parameter of `fn` is `Input()` or `Depends(...)` (declare
+            them on the steps instead), or, from the factory, if `fn` returns
+            something other than a `Flow`.
+
+    Example:
+    ```python
+    >>> from pyflowstep import step
+    >>> @step
+    ... def add(total: int, amount: int) -> int:
+    ...     return total + amount
+    >>> @chain
+    ... def add_twice(amount: int) -> Flow[int]:
+    ...     return add(amount) >> add(amount)
+    >>> flow = add_twice(2) >> add(1)
+    >>> flow
+    Flow(add >> add >> add)
+    >>> flow(0)
+    5
+
+    ```
+
+    """
+    chain_name = action_name(fn)
+
+    for name, marker in [*find_inputs(fn).items(), *find_dependencies(fn).items()]:
+        kind = "Input" if isinstance(marker, RunInput) else "Depends"
+        msg = (
+            f"Chain '{chain_name}' cannot take '{name}' as {kind}; a chain has no run of its own, "
+            "declare it on the steps the chain returns"
+        )
+        raise InvalidStepError(msg)
+
+    arguments_signature = signature(fn)
+    processors = find_processors(fn, name=chain_name)
+
+    @wraps(fn)
+    def factory(*args: P.args, **kwargs: P.kwargs) -> Flow[T]:
+        bound = bind_arguments(arguments_signature, chain_name, args, kwargs)
+        bound = process_arguments(processors, bound) if processors else bound
+        flow = fn(*bound.args, **bound.kwargs)
+
+        if not isinstance(flow, Flow):
+            msg = f"Chain '{chain_name}' must return a Flow, got {flow!r}"
+            raise InvalidStepError(msg)
+
+        return flow
+
+    return factory
+
+
 def bind_arguments(
     arguments_signature: Signature,
     step_name: str,

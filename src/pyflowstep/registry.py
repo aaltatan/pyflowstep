@@ -8,7 +8,8 @@ from typing import Any
 from pyvocabulary import Vocabulary
 
 from .exceptions import StepAlreadyRegisteredError, StepDoesNotExistError
-from .steps import StepFactory, StepFn, TapFn, override, step, tap
+from .flow import Flow
+from .steps import StepFactory, StepFn, TapFn, chain, override, step, tap
 from .validators import _invalid_step_name, validate_step_name
 
 
@@ -203,6 +204,44 @@ class StepsRegistry[T]:
 
         def decorator(fn: TapFn[T, P]) -> StepFactory[T, P]:
             return self._add(fn, make, name=name, description=description, hidden=hidden)
+
+        return decorator
+
+    def chain[**P](
+        self,
+        *,
+        name: str | None = None,
+        description: str | None = None,
+        hidden: bool = False,
+    ) -> Callable[[Callable[P, Flow[T]]], StepFactory[T, P]]:
+        """Return a decorator registering a function that builds a flow, see `pyflowstep.chain`.
+
+        Args:
+            name: The step name; defaults to the function name.
+            description: Overrides the function docstring (shown in the JSON schema).
+            hidden: Keep the chain out of the registry lookups (`steps`, `[]`, `in`),
+                hence out of the compiler and the JSON schema. The returned
+                factory stays fully usable from Python.
+
+        Example:
+        ```python
+        >>> from pyflowstep import Flow, FlowCompiler
+        >>> registry = StepsRegistry[int]()
+        >>> @registry.step()
+        ... def add(total: int, amount: int) -> int:
+        ...     return total + amount
+        >>> @registry.chain()
+        ... def add_twice(amount: int) -> Flow[int]:
+        ...     return add(amount) >> add(amount)
+        >>> FlowCompiler(registry.steps).compile([{"name": "add_twice", "args": [2]}])(0)
+        4
+
+        ```
+
+        """
+
+        def decorator(fn: Callable[P, Flow[T]]) -> StepFactory[T, P]:
+            return self._add(fn, chain, name=name, description=description, hidden=hidden)
 
         return decorator
 

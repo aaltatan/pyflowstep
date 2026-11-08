@@ -412,11 +412,145 @@ page_steps.register(lambda page: page, name="noop")  # register without a decora
 | `tap(name=, description=, hidden=)`                              | Decorator for side-effect functions (return value ignored)  |
 | `register(fn, *, name=, description=, hidden=, passthrough=)`    | Register without decorator syntax                           |
 | `override(original, name=, description=, hidden=)`               | Decorator registering a variant of a step, see [override](#override) |
+| `chain(name=, description=, hidden=)`                            | Decorator registering a function that builds a flow, see [Chains](#chains) |
 | `steps`                                                          | Read-only mapping of visible steps                          |
 | `registry[name]`, `name in registry`, `len()`, iteration         | Lookup over visible steps                                   |
 
 - `name` is the step's public name: the compiler looks it up, and `repr` and argument errors show it (`Flow(type)` above, not `Flow(fill)`).
 - `description` overrides the docstring, which becomes the step description in the JSON schema.
+
+### Chains
+
+A chain is a named step made of other steps. There are four ways to reuse a sequence of steps, and each one adds something to the one before:
+
+```python
+from pyflowstep import Flow, chain, step
+
+
+@step
+def fill(form: dict, selector: str, value: str) -> dict:
+    return {**form, selector: value}
+
+
+@step
+def click(form: dict, selector: str) -> dict:
+    return {**form, "clicked": selector}
+
+
+# 1. a Flow value: fine when nothing varies
+save = fill("#status", "draft") >> click("#save")
+
+
+# 2. a plain function: takes arguments, but errors are plain TypeErrors
+def submit(date_selector: str) -> Flow[dict]:
+    return fill(date_selector, "2026-11-08") >> click("#save")
+
+
+# 3. @chain: arguments are bound and processed like a step's
+@chain
+def submit_voucher(date_selector: str) -> Flow[dict]:
+    """Fill the date and save."""
+    return fill(date_selector, "2026-11-08") >> click("#save")
+
+
+submit_voucher("#date")({})   # {'#date': '2026-11-08', 'clicked': '#save'}
+submit()                      # TypeError: submit() missing 1 required positional argument: 'date_selector'
+submit_voucher()              # MissingArgumentError: missing a required argument: 'date_selector' for step 'submit_voucher'
+```
+
+4. `@registry.chain(name=, description=, hidden=)` also registers the chain, so JSON can use it ([below](#chains-from-json)).
+
+A chain's factory takes every parameter as a build argument. There is no subject. The flow it returns **stays flat**, so chains sit next to steps and inside other chains, and `repr` lists the underlying steps:
+
+```python
+@chain
+def open_and_submit(date_selector: str) -> Flow[dict]:
+    return click("#new") >> submit_voucher(date_selector)
+
+
+flow = open_and_submit("#date") >> fill("#note", "done")
+flow       # Flow(click >> fill >> click >> fill)
+flow({})   # {'clicked': '#save', '#date': '2026-11-08', '#note': 'done'}
+```
+
+**A chain's inputs are its steps' inputs.** They show in `flow.inputs` and are checked before the first step runs:
+
+```python
+@step
+def fill_number(form: dict, selector: str, number: str = Input()) -> dict:
+    return {**form, selector: number}
+
+
+@chain
+def submit_numbered() -> Flow[dict]:
+    return fill_number("#no") >> click("#save")
+
+
+flow = click("#new") >> submit_numbered()
+flow.inputs               # frozenset({'number'})
+flow({})                  # MissingInputError: missing run input 'number' for step 'fill_number'; run the flow as flow(subject, number=...)
+flow({}, number="V-7")    # {'clicked': '#save', '#no': 'V-7'}
+```
+
+**`Process` works on chain arguments**, like on step arguments:
+
+```python
+@chain
+def fill_rows(selector: str, count: Annotated[int, Process(int)]) -> Flow[dict]:
+    return Flow(*(action for i in range(count) for action in fill(f"{selector}{i}", "x")))
+
+
+fill_rows("#row", "2")({})   # {'#row0': 'x', '#row1': 'x'}
+```
+
+#### Chains from JSON
+
+```python
+steps = StepsRegistry[dict]()
+# ... fill and click registered with @steps.step()
+
+
+@steps.chain(description="Fill the date and save.")
+def submit(date_selector: str = "#date") -> Flow[dict]:
+    return steps["fill"](date_selector, "2026-11-08") >> steps["click"]("#save")
+
+
+flow = FlowCompiler(steps.steps).compile([
+    {"name": "submit"},
+    {"name": "submit", "kwargs": {"date_selector": "#due"}},
+])
+flow       # Flow(fill >> click >> fill >> click)
+flow({})   # {'#date': '2026-11-08', 'clicked': '#save', '#due': '2026-11-08'}
+```
+
+In the JSON schema a chain looks like a step: `submit` takes `date_selector` in `args` or `kwargs` (a string, default `"#date"`) and is described as "Fill the date and save.".
+
+**Errors.** Bad arguments raise the usual `ArgumentError`, with the JSON path when compiled. `Input` and `Depends` belong on the steps a chain returns, not on the chain:
+
+```python
+FlowCompiler(steps.steps).compile([{"name": "click", "args": ["#new"]}, {"name": "submit", "args": ["#a", "#b"]}])
+# TooManyArgumentsError: too many positional arguments for step 'submit'
+# at $[1]
+
+@chain
+def submit_input(date: str = Input()) -> Flow[dict]: ...
+# InvalidStepError: Chain 'submit_input' cannot take 'date' as Input; a chain has no run of its own,
+# declare it on the steps the chain returns   (the same for Depends)
+
+@chain
+def forgot(selector: str):
+    fill(selector, "x")          # no return
+
+
+forgot("#a")
+# InvalidStepError: Chain 'forgot' must return a Flow, got None
+
+@steps.chain(name="click")
+def again() -> Flow[dict]: ...
+# StepAlreadyRegisteredError: Step 'click' is already registered.
+```
+
+**A chain or a step that calls flows?** Use a chain when the sequence is fixed once its arguments are known: it stays flat, its inputs are checked up front, and JSON sees its steps in `repr` and errors. Write a step whose body runs flows, `(a() >> b())(page)`, only when the body has to decide at run time what to do, such as looping until a page shows a result. Such a step is one opaque step to the flow around it.
 
 ---
 
@@ -1064,6 +1198,7 @@ checkout = note_if(is_large(Decimal(100)), "needs approval") >> apply_tax(round(
 | `compose(*actions)`                                          | function  | Combine actions and flows into one flat flow                    |
 | `step` / `tap`                                               | decorator | Turn a function into a step factory                             |
 | `override(original)`                                         | decorator | A variant of a step with other defaults, see [override](#override) |
+| `chain`                                                      | decorator | A named step factory made of other steps, see [Chains](#chains) |
 | `StepsRegistry[T]`                                           | class     | Named collection of steps                                       |
 | `pyargprocessors.Process(fn)`                                | marker    | Apply `fn` to the value passed for a parameter, see [Processing arguments](#processing-arguments) |
 | `Depends(provider)`                                          | marker    | Inject a parameter by calling `provider`, see [Dependencies](#dependencies) |
