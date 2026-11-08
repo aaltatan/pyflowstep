@@ -38,7 +38,15 @@ from .dependencies import (
 )
 from .exceptions import InvalidStepError, to_argument_error
 from .flow import Flow, action_name
-from .inputs import RunInput, find_inputs, mark_inputs, resolve_inputs, step_inputs
+from .inputs import (
+    RunInput,
+    find_inputs,
+    mark_inputs,
+    mark_output,
+    resolve_inputs,
+    step_inputs,
+    validate_output_name,
+)
 
 type StepFn[T, **P] = Callable[Concatenate[T, P], T]
 type TapFn[T, **P] = Callable[Concatenate[T, P], Any]
@@ -113,6 +121,47 @@ def tap[T, **P](fn: TapFn[T, P], /) -> StepFactory[T, P]:
 
     """
     return _make_step(fn, passthrough=True)
+
+
+def output[T, **P](name: str, /) -> Callable[[TapFn[T, P]], StepFactory[T, P]]:
+    """Return a decorator for steps whose return value becomes the run input `name`.
+
+    The subject passes through unchanged, like `tap`. Later steps of the run
+    read the value with an ordinary `name: <type> = Input()`, so they stay
+    reusable. A flow checks the order before its first step runs: a step that
+    reads `name` before it is produced still needs it from the caller.
+
+    A later output of the same name replaces the earlier one, and a produced
+    value replaces one the caller passed, for the steps after the producer.
+    A nested flow called with inputs of its own keeps its outputs to itself.
+
+    Raises:
+        InvalidInputError: If `name` is not a valid identifier, or is a keyword.
+
+    Example:
+    ```python
+    >>> from pyflowstep import Input, step
+    >>> @output("count")
+    ... def count(items: list[str]) -> int:
+    ...     return len(items)
+    >>> @step
+    ... def label(items: list[str], count: int = Input()) -> list[str]:
+    ...     return [f"{item}/{count}" for item in items]
+    >>> flow = count() >> label()
+    >>> flow.inputs
+    frozenset()
+    >>> flow(["a", "b"])
+    ['a/2', 'b/2']
+
+    ```
+
+    """
+    output_name = validate_output_name(name)
+
+    def decorator(fn: TapFn[T, P]) -> StepFactory[T, P]:
+        return _make_step(fn, passthrough=True, output=output_name)
+
+    return decorator
 
 
 def override[T, **P](
@@ -297,8 +346,9 @@ def _make_step[T, **P](
             if injected
             else _call(run, bound)
         )
-        action = _make_action(call, fn, step_name, passthrough=passthrough)
+        action = _make_action(call, fn, step_name, passthrough=passthrough, output=output)
         mark_inputs(action, inputs)
+        mark_output(action, output)
 
         return Flow(action)
 
@@ -393,9 +443,15 @@ def _make_action[T](
     step_name: str,
     *,
     passthrough: bool,
+    output: str | None = None,
 ) -> Callable[[T], T]:
     def run(subject: T) -> T:
         result = call(subject)
+
+        if output is not None:
+            with run_scope() as scope:
+                scope.inputs[output] = result
+
         return subject if passthrough else result
 
     run.__name__ = run.__qualname__ = step_name

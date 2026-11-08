@@ -5,7 +5,7 @@ from functools import reduce, wraps
 from typing import Any, Concatenate
 
 from .dependencies import run_scope
-from .inputs import check_inputs, check_signature, required_inputs
+from .inputs import check_inputs, check_signature, flow_inputs
 
 type Action[T] = Callable[[T], T]
 
@@ -53,8 +53,11 @@ class Flow[T]:
 
     @property
     def inputs(self) -> frozenset[str]:
-        """The names of the run inputs the steps of the flow require, see `Input`."""
-        return frozenset().union(*map(required_inputs, self._actions))
+        """The names of the run inputs the caller must give, see `Input`.
+
+        An input an earlier step produces, see `output`, is not asked of the caller.
+        """
+        return flow_inputs(self._actions)
 
     def __call__(self, obj: T, /, **inputs: Any) -> T:
         with run_scope(inputs) as run:

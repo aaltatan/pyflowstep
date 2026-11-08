@@ -10,4 +10,4 @@
 - [x] Add Python 3.12 to CI so this cannot regress (`.github/workflows/ci.yml`: ruff, pyright, pytest with coverage on 3.12 and 3.13)
 - [x] `override(original)`: a variant of a step with the same parameters and other defaults (stub decorator, registry form)
 - [x] `chain` and `StepsRegistry.chain()`: a named step factory built from other steps, usable from JSON
-- [ ] `output(name)` and `StepsRegistry.output()`: a step's return value becomes a run input for later steps, checked in order
+- [x] `output(name)` and `StepsRegistry.output()`: a step's return value becomes a run input for later steps, checked in order

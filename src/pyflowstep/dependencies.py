@@ -152,7 +152,7 @@ class Run:
 
     cache: dict[Provider, Any] = field(default_factory=dict)
     cleanups: ExitStack = field(default_factory=ExitStack)
-    inputs: Mapping[str, Any] = field(default_factory=dict)
+    inputs: dict[str, Any] = field(default_factory=dict)
 
 
 _RUN: ContextVar[Run | None] = ContextVar("pyflowstep_run", default=None)

@@ -413,6 +413,7 @@ page_steps.register(lambda page: page, name="noop")  # register without a decora
 | `register(fn, *, name=, description=, hidden=, passthrough=)`    | Register without decorator syntax                           |
 | `override(original, name=, description=, hidden=)`               | Decorator registering a variant of a step, see [override](#override) |
 | `chain(name=, description=, hidden=)`                            | Decorator registering a function that builds a flow, see [Chains](#chains) |
+| `output(name, step_name=, description=, hidden=)`                | Decorator registering a step whose return value is a run input, see [Outputs](#outputs) |
 | `steps`                                                          | Read-only mapping of visible steps                          |
 | `registry[name]`, `name in registry`, `len()`, iteration         | Lookup over visible steps                                   |
 
@@ -958,13 +959,190 @@ extend-immutable-calls = ["pyflowstep.Depends", "pyflowstep.Input"]
 | `voucher: Input[Voucher]`          | `voucher: Voucher = Input()`             |
 | `note: Input[str] = ""`            | `note: str = Input(default="")`          |
 
-### `Input` or `Depends`?
+### Outputs
+
+Sometimes a later step needs a value that an earlier step finds: a number read from the page, an id returned by a save. Decorate the earlier step with `output(name)`. Its return value becomes the run input `name`, and the subject passes through unchanged, like a `tap`. The later step reads it with an ordinary `Input()`, so it stays reusable with or without a producer:
+
+```python
+from pyflowstep import Input, output, step
+
+
+@output("number")
+def read_number(form: dict) -> str:
+    return form["#no"]
+
+
+@step
+def fill(form: dict, selector: str, number: str = Input()) -> dict:
+    return {**form, selector: number}
+
+
+flow = read_number() >> fill("#target")
+flow({"#no": "V-7"})   # {'#no': 'V-7', '#target': 'V-7'}
+flow.inputs            # frozenset(): the caller no longer gives `number`
+```
+
+One output can be read by several steps, a flow can have several outputs, and an optional `Input(default=...)` takes the produced value once there is one:
+
+```python
+@step
+def note(form: dict, number: str = Input()) -> dict:
+    return {**form, "note": f"copied {number}"}
+
+
+@output("year")
+def read_year(form: dict) -> str:
+    return form["#date"][:4]
+
+
+@step
+def fill_ref(form: dict, number: str = Input(), year: str = Input()) -> dict:
+    return {**form, "#ref": f"{year}/{number}"}
+
+
+@output("user")
+def read_user(form: dict) -> str:
+    return form["#owner"]
+
+
+@step
+def stamp(form: dict, user: str = Input(default="system")) -> dict:
+    return {**form, "#by": user}
+
+
+(read_number() >> fill("#target") >> note())({"#no": "V-7"})
+# {'#no': 'V-7', '#target': 'V-7', 'note': 'copied V-7'}
+(read_number() >> read_year() >> fill_ref())({"#no": "V-7", "#date": "2026-11-08"})
+# {'#no': 'V-7', '#date': '2026-11-08', '#ref': '2026/V-7'}
+(stamp() >> read_user() >> stamp())({"#owner": "ada"})
+# {'#owner': 'ada', '#by': 'ada'}   (the first stamp wrote 'system', the second 'ada')
+```
+
+A producer works anywhere in the flow, also inside a [chain](#chains) or from JSON. `registry.output(name, step_name=, description=, hidden=)` registers one. Its first argument is the output name, so the step name is the keyword `step_name`:
+
+```python
+@chain
+def copy_number(selector: str) -> Flow[dict]:
+    return read_number() >> fill(selector)
+
+
+(copy_number("#target") >> note())({"#no": "V-7"})
+# {'#no': 'V-7', '#target': 'V-7', 'note': 'copied V-7'}
+
+steps = StepsRegistry[dict]()
+
+
+@steps.output("number", step_name="read_number")
+def read_no(form: dict) -> str:
+    """Read the voucher number."""
+    return form["#no"]
+
+
+# ... fill registered with @steps.step()
+
+flow = FlowCompiler(steps.steps).compile([
+    {"name": "read_number"},
+    {"name": "fill", "args": ["#target"]},
+])
+flow({"#no": "V-7"})   # {'#no': 'V-7', '#target': 'V-7'}
+```
+
+**Order is checked before anything runs.** A step that reads `number` before the producer still needs it from the caller, so a wrong order fails before the first step:
+
+```python
+flow = save() >> fill("#target") >> read_number()
+flow.inputs            # frozenset({'number'})
+flow({"#no": "V-7"})   # MissingInputError: missing run input 'number' for step 'fill'; run the flow as flow(subject, number=...)
+                       # and `save` never ran
+```
+
+`Flow.signature` follows the same rule, so a produced name must not be declared:
+
+```python
+@(read_number() >> fill("#target")).signature
+def copy(form: dict, /) -> dict: ...
+
+
+@(read_number() >> fill("#target")).signature
+def copy2(form: dict, /, *, number: str) -> dict: ...
+# InvalidInputError: Signature 'copy2' does not match the flow: unknown input 'number'
+```
+
+**Replacing values.** A later output of the same name replaces the earlier one, and a produced value replaces one the caller passed, both only for the steps after the producer. A step that needs its own output name reads it before it writes it, so the caller must give it:
+
+```python
+(read_number() >> fill("#a") >> set_no("V-8") >> read_number() >> fill("#b"))({"#no": "V-7"})
+# {'#no': 'V-8', '#a': 'V-7', '#b': 'V-8'}
+
+(fill("#a") >> read_number() >> fill("#b"))({"#no": "V-7"}, number="given")
+# {'#no': 'V-7', '#a': 'given', '#b': 'V-7'}
+
+
+@output("number")
+def next_number(form: dict, number: str = Input()) -> str:
+    return str(int(number) + 1)
+
+
+(next_number() >> fill("#no")).inputs   # frozenset({'number'})
+(next_number() >> fill("#no"))({}, number="41")   # {'#no': '42'}
+```
+
+**Scope.** An output lives in its run. It is gone when the run ends, so the next run starts without it. A nested flow called with inputs of its own gets an overlay, so what it outputs ends with that call:
+
+```python
+inner = read_number() >> fill("#inner")
+
+
+@step
+def run_inner(form: dict) -> dict:
+    return inner({**form, "#no": "INNER"}, mode="nested")
+
+
+(read_number() >> run_inner() >> fill("#outer"))({"#no": "V-7"})
+# {'#no': 'INNER', '#inner': 'INNER', '#outer': 'V-7'}
+```
+
+**An output step is a step**, so it can take its own `Input` and `Depends`. A producer that returns `None` produces `None`:
+
+```python
+@output("number")
+def make_number(form: dict, year: str = Input(), prefix: str = Depends(get_prefix)) -> str:
+    return f"{prefix}-{year}-{len(form)}"
+
+
+(make_number() >> fill("#no"))({}, year="2026")   # {'#no': 'INV-2026-0'}
+
+
+@output("number")
+def maybe_number(form: dict) -> str | None:
+    return form.get("#no")
+
+
+@step
+def fill_or_skip(form: dict, number: str | None = Input()) -> dict:
+    return form if number is None else {**form, "#target": number}
+
+
+(maybe_number() >> fill_or_skip())({})   # {}
+```
+
+The output name must be usable as a parameter name, and it is checked when the step is decorated:
+
+```python
+output("voucher-number")
+# InvalidInputError: Invalid output name: 'voucher-number', it names the run input that later steps read,
+# so it must be a valid parameter name: an identifier that is not a keyword
+output("class")   # the same error: a keyword
+```
+
+### `Input`, `Depends` or an output?
 
 | The object…                                                  | Use                                   |
 | ------------------------------------------------------------ | ------------------------------------- |
 | is written in the flow definition (a selector, a limit)      | a plain argument, with `Process` if needed |
 | can be built by a function, the same way for every caller (a mailer, a session) | `Depends(provider)`     |
 | is only known to whoever runs the flow (a user, a record, credentials) | `Input()`                   |
+| is found by an earlier step of the same run (a number read from the page, a saved id) | `output(name)` on that step, `Input()` on the readers |
 
 ---
 
@@ -1199,6 +1377,7 @@ checkout = note_if(is_large(Decimal(100)), "needs approval") >> apply_tax(round(
 | `step` / `tap`                                               | decorator | Turn a function into a step factory                             |
 | `override(original)`                                         | decorator | A variant of a step with other defaults, see [override](#override) |
 | `chain`                                                      | decorator | A named step factory made of other steps, see [Chains](#chains) |
+| `output(name)`                                               | decorator | A step whose return value becomes the run input `name`, see [Outputs](#outputs) |
 | `StepsRegistry[T]`                                           | class     | Named collection of steps                                       |
 | `pyargprocessors.Process(fn)`                                | marker    | Apply `fn` to the value passed for a parameter, see [Processing arguments](#processing-arguments) |
 | `Depends(provider)`                                          | marker    | Inject a parameter by calling `provider`, see [Dependencies](#dependencies) |

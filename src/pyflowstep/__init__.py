@@ -61,7 +61,7 @@ from .inputs import Input
 from .json_schema import get_flow_json_schema, get_json_schema, get_step_json_schema
 from .loaders import FlowParser, load_flow_definition, register_flow_format
 from .registry import StepsRegistry
-from .steps import StepFactory, StepFn, TapFn, chain, override, step, tap
+from .steps import StepFactory, StepFn, TapFn, chain, output, override, step, tap
 
 __all__ = [
     "Action",
@@ -98,6 +98,7 @@ __all__ = [
     "get_json_schema",
     "get_step_json_schema",
     "load_flow_definition",
+    "output",
     "override",
     "override_dependencies",
     "register_flow_format",

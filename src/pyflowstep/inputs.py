@@ -34,7 +34,8 @@ pyflowstep.exceptions.MissingInputError: missing run input 'rate' for step 'add_
 
 """
 
-from collections.abc import Callable, Iterable, Mapping
+import keyword
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from inspect import Parameter, signature
 from typing import Any
@@ -44,6 +45,7 @@ from pyargprocessors import annotated_metadata, resolved_annotations
 from .exceptions import InvalidInputError, MissingInputError
 
 _INPUTS = "__pyflowstep_inputs__"
+_OUTPUT = "__pyflowstep_output__"
 _REQUIRED_OR_NOT = {True: "required (no default)", False: "optional (a default)"}
 
 
@@ -182,6 +184,72 @@ def action_inputs(action: Callable[..., Any]) -> Mapping[str, RunInput]:
     return getattr(action, _INPUTS, {})
 
 
+def validate_output_name(name: str) -> str:
+    """Return `name` if it can name a run input: a valid identifier that is not a keyword.
+
+    Raises:
+        InvalidInputError: Otherwise.
+
+    Example:
+    ```python
+    >>> validate_output_name("number")
+    'number'
+    >>> validate_output_name("class")
+    Traceback (most recent call last):
+    ...
+    pyflowstep.exceptions.InvalidInputError: Invalid output name: 'class', ...
+
+    ```
+
+    """
+    if not isinstance(name, str) or not name.isidentifier() or keyword.iskeyword(name):
+        msg = (
+            f"Invalid output name: {name!r}, it names the run input that later steps read, "
+            "so it must be a valid parameter name: an identifier that is not a keyword"
+        )
+        raise InvalidInputError(msg)
+
+    return name
+
+
+def mark_output(action: Callable[..., Any], name: str | None) -> None:
+    """Record on a step action the run input it produces, for `action_output` to read."""
+    setattr(action, _OUTPUT, name)
+
+
+def action_output(action: Callable[..., Any]) -> str | None:
+    """Return the name of the run input an action produces, or `None`."""
+    return getattr(action, _OUTPUT, None)
+
+
+def flow_inputs(actions: Iterable[Callable[..., Any]]) -> frozenset[str]:
+    """Return the inputs `actions` require from the caller: not produced by an earlier action.
+
+    Example:
+    ```python
+    >>> from pyflowstep import output, step
+    >>> @output("rate")
+    ... def read_rate(price: float) -> float:
+    ...     return 0.25
+    >>> @step
+    ... def add_tax(price: float, rate: float = Input()) -> float:
+    ...     return price * (1 + rate)
+    >>> flow_inputs((read_rate() >> add_tax()).actions)
+    frozenset()
+    >>> flow_inputs((add_tax() >> read_rate()).actions)
+    frozenset({'rate'})
+
+    ```
+
+    """
+    return frozenset(
+        name
+        for _, inputs in _unproduced_inputs(actions)
+        for name, marker in inputs.items()
+        if marker.required
+    )
+
+
 def required_inputs(action: Callable[..., Any]) -> frozenset[str]:
     """Return the names of the inputs an action requires; plain callables require none.
 
@@ -211,8 +279,9 @@ def check_inputs(actions: Iterable[Callable[..., Any]], given: Mapping[str, Any]
     """
     missing = [
         (name, getattr(action, "__name__", repr(action)))
-        for action in actions
-        for name in sorted(required_inputs(action) - given.keys())
+        for action, inputs in _unproduced_inputs(actions)
+        for name in sorted(name for name, marker in inputs.items() if marker.required)
+        if name not in given
     ]
 
     if missing:
@@ -242,8 +311,8 @@ def check_signature(actions: Iterable[Callable[..., Any]], fn: Callable[..., Any
         raise InvalidInputError(msg)
 
     expected: dict[str, bool] = {}
-    for action in actions:
-        for name, marker in action_inputs(action).items():
+    for _, inputs in _unproduced_inputs(actions):
+        for name, marker in inputs.items():
             expected[name] = expected.get(name, False) or marker.required
 
     # shortcut: names and required-ness only, annotations are not compared; compare them
@@ -262,6 +331,23 @@ def check_signature(actions: Iterable[Callable[..., Any]], fn: Callable[..., Any
     if problems:
         msg = f"Signature '{fn_name}' does not match the flow: {'; '.join(problems)}"
         raise InvalidInputError(msg)
+
+
+def _unproduced_inputs[A: Callable[..., Any]](
+    actions: Iterable[A],
+) -> Iterator[tuple[A, dict[str, RunInput]]]:
+    """Yield each action with its inputs that no earlier action produces, see `output`.
+
+    An action reads its inputs before it writes its output, so its own output
+    does not count for it.
+    """
+    produced: set[str] = set()
+
+    for action in actions:
+        yield action, {n: m for n, m in action_inputs(action).items() if n not in produced}
+
+        if (name := action_output(action)) is not None:
+            produced.add(name)
 
 
 def _missing_message(missing: Iterable[tuple[str, str]]) -> str:

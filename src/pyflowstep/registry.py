@@ -9,7 +9,7 @@ from pyvocabulary import Vocabulary
 
 from .exceptions import StepAlreadyRegisteredError, StepDoesNotExistError
 from .flow import Flow
-from .steps import StepFactory, StepFn, TapFn, chain, override, step, tap
+from .steps import StepFactory, StepFn, TapFn, chain, output, override, step, tap
 from .validators import _invalid_step_name, validate_step_name
 
 
@@ -242,6 +242,50 @@ class StepsRegistry[T]:
 
         def decorator(fn: Callable[P, Flow[T]]) -> StepFactory[T, P]:
             return self._add(fn, chain, name=name, description=description, hidden=hidden)
+
+        return decorator
+
+    def output[**P](
+        self,
+        name: str,
+        /,
+        *,
+        step_name: str | None = None,
+        description: str | None = None,
+        hidden: bool = False,
+    ) -> Callable[[TapFn[T, P]], StepFactory[T, P]]:
+        """Return a decorator registering a step whose return value becomes the run input `name`.
+
+        See `pyflowstep.output`.
+
+        Args:
+            name: The name of the run input the step produces.
+            step_name: The step name; defaults to the function name.
+            description: Overrides the function docstring (shown in the JSON schema).
+            hidden: Keep the step out of the registry lookups (`steps`, `[]`, `in`),
+                hence out of the compiler and the JSON schema. The returned
+                factory stays fully usable from Python.
+
+        Example:
+        ```python
+        >>> from pyflowstep import FlowCompiler, Input
+        >>> registry = StepsRegistry[list[str]]()
+        >>> @registry.output("count", step_name="count")
+        ... def count_items(items: list[str]) -> int:
+        ...     return len(items)
+        >>> @registry.step()
+        ... def label(items: list[str], count: int = Input()) -> list[str]:
+        ...     return [f"{item}/{count}" for item in items]
+        >>> FlowCompiler(registry.steps).compile([{"name": "count"}, {"name": "label"}])(["a"])
+        ['a/1']
+
+        ```
+
+        """
+        make = output(name)
+
+        def decorator(fn: TapFn[T, P]) -> StepFactory[T, P]:
+            return self._add(fn, make, name=step_name, description=description, hidden=hidden)
 
         return decorator
 
