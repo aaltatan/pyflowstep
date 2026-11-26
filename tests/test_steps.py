@@ -141,6 +141,21 @@ class TestArgumentValidation:
         with pytest.raises(PositionalOnlyArgumentError, match="positional-only"):
             pad(width=3)
 
+    def test_required_positional_only_passed_by_keyword_is_not_missing(self) -> None:
+        @step
+        def pad(text: str, width: int, /) -> str:
+            return text.ljust(width)
+
+        with pytest.raises(PositionalOnlyArgumentError, match="width for step 'pad'"):
+            pad(width=3)
+
+        with pytest.raises(PositionalOnlyArgumentError):
+            pad(3, width=3)
+
+    def test_misspelt_keyword_is_reported_before_the_missing_argument(self) -> None:
+        with pytest.raises(UnexpectedKeywordArgumentError, match="'iten'"):
+            append(iten="b")
+
     def test_error_is_chained_to_the_original_type_error(self) -> None:
         with pytest.raises(MissingArgumentError) as info:
             append()
@@ -189,3 +204,14 @@ class TestInvalidSteps:
 
     def test_invalid_step_error_is_a_type_error(self) -> None:
         assert issubclass(InvalidStepError, TypeError)
+
+    @pytest.mark.parametrize("make", [step, tap])
+    def test_step_factory_cannot_be_made_a_step_again(self, make: Any) -> None:
+        with pytest.raises(InvalidStepError, match="'append' is already a step factory"):
+            make(append)
+
+    def test_registering_a_step_factory_is_rejected(self) -> None:
+        from pyflowstep import StepsRegistry  # noqa: PLC0415
+
+        with pytest.raises(InvalidStepError, match="already a step factory"):
+            StepsRegistry[list[str]]().register(append)

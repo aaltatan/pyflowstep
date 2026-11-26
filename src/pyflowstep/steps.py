@@ -36,7 +36,7 @@ from .dependencies import (
     run_scope,
     step_dependencies,
 )
-from .exceptions import InvalidStepError, to_argument_error
+from .exceptions import InvalidStepError, PositionalOnlyArgumentError, to_argument_error
 from .flow import Flow, action_name
 from .inputs import (
     RunInput,
@@ -290,6 +290,11 @@ def bind_arguments(
 ) -> BoundArguments:
     """Bind step arguments to a signature, raising the matching `ArgumentError`.
 
+    Problems are reported in the order Python itself reports them for a call:
+    keywords that cannot be passed by name first, then surplus or unknown
+    arguments, and only then the missing ones. So a typo in a keyword is
+    reported as an unexpected keyword rather than as a missing argument.
+
     Example:
     ```python
     >>> from inspect import signature
@@ -303,7 +308,23 @@ def bind_arguments(
     ```
 
     """
+    parameters = arguments_signature.parameters
+
+    if not any(p.kind is Parameter.VAR_KEYWORD for p in parameters.values()) and (
+        positional_only := [
+            name
+            for name in kwargs
+            if name in parameters and parameters[name].kind is Parameter.POSITIONAL_ONLY
+        ]
+    ):
+        msg = (
+            "got some positional-only arguments passed as keyword arguments: "
+            f"{', '.join(positional_only)} for step '{step_name}'"
+        )
+        raise PositionalOnlyArgumentError(msg)
+
     try:
+        arguments_signature.bind_partial(*args, **kwargs)  # surplus and unknown arguments first
         return arguments_signature.bind(*args, **kwargs)
     except TypeError as error:
         raise to_argument_error(error, step_name) from error
@@ -319,6 +340,15 @@ def _make_step[T, **P](
     """Return the factory of a step whose signature data comes from `fn` and runs `body or fn`."""
     run = body or fn
     step_name = action_name(fn)
+
+    # a factory's signature lacks the subject: its first argument would silently become it
+    if hasattr(fn, _ORIGIN):
+        msg = (
+            f"'{step_name}' is already a step factory; use it as it is, or make the step from "
+            "the plain function (to register it, decorate it with a registry method instead)"
+        )
+        raise InvalidStepError(msg)
+
     full_signature = _arguments_signature(fn, step_name)
     dependencies = step_dependencies(fn, step_name)
     inputs = step_inputs(fn, step_name)

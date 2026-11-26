@@ -25,5 +25,6 @@ def _invalid_step_name(name: object) -> InvalidStepNameError:
     return InvalidStepNameError(
         f"Invalid step name: {name!r}, "
         "you should follow the python variable naming convention: "
-        "name must start with a letter and can only contain letters, numbers and underscores"
+        "name must start with a letter or underscore "
+        "and can only contain letters, numbers and underscores"
     )
