@@ -319,6 +319,15 @@ def _make_step[T, **P](
     """Return the factory of a step whose signature data comes from `fn` and runs `body or fn`."""
     run = body or fn
     step_name = action_name(fn)
+
+    # a factory's signature lacks the subject: its first argument would silently become it
+    if hasattr(fn, _ORIGIN):
+        msg = (
+            f"'{step_name}' is already a step factory; use it as it is, or make the step from "
+            "the plain function (to register it, decorate it with a registry method instead)"
+        )
+        raise InvalidStepError(msg)
+
     full_signature = _arguments_signature(fn, step_name)
     dependencies = step_dependencies(fn, step_name)
     inputs = step_inputs(fn, step_name)

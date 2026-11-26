@@ -189,3 +189,14 @@ class TestInvalidSteps:
 
     def test_invalid_step_error_is_a_type_error(self) -> None:
         assert issubclass(InvalidStepError, TypeError)
+
+    @pytest.mark.parametrize("make", [step, tap])
+    def test_step_factory_cannot_be_made_a_step_again(self, make: Any) -> None:
+        with pytest.raises(InvalidStepError, match="'append' is already a step factory"):
+            make(append)
+
+    def test_registering_a_step_factory_is_rejected(self) -> None:
+        from pyflowstep import StepsRegistry  # noqa: PLC0415
+
+        with pytest.raises(InvalidStepError, match="already a step factory"):
+            StepsRegistry[list[str]]().register(append)
