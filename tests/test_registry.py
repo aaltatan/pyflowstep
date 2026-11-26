@@ -137,6 +137,13 @@ class TestRegistration:
         with pytest.raises(InvalidStepNameError):
             StepsRegistry[int]().register(lambda n: n, name=name)
 
+    def test_invalid_name_message_states_the_accepted_names(self) -> None:
+        registry = StepsRegistry[int]()
+        registry.register(lambda n: n, name="_private")  # a leading underscore is accepted
+
+        with pytest.raises(InvalidStepNameError, match="start with a letter or underscore"):
+            registry.register(lambda n: n, name="1st")
+
     def test_lambda_without_name(self) -> None:
         with pytest.raises(InvalidStepNameError):
             StepsRegistry[int]().register(lambda n: n)
