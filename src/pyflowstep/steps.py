@@ -36,7 +36,7 @@ from .dependencies import (
     run_scope,
     step_dependencies,
 )
-from .exceptions import InvalidStepError, to_argument_error
+from .exceptions import InvalidStepError, PositionalOnlyArgumentError, to_argument_error
 from .flow import Flow, action_name
 from .inputs import (
     RunInput,
@@ -290,6 +290,11 @@ def bind_arguments(
 ) -> BoundArguments:
     """Bind step arguments to a signature, raising the matching `ArgumentError`.
 
+    Problems are reported in the order Python itself reports them for a call:
+    keywords that cannot be passed by name first, then surplus or unknown
+    arguments, and only then the missing ones. So a typo in a keyword is
+    reported as an unexpected keyword rather than as a missing argument.
+
     Example:
     ```python
     >>> from inspect import signature
@@ -303,7 +308,23 @@ def bind_arguments(
     ```
 
     """
+    parameters = arguments_signature.parameters
+
+    if not any(p.kind is Parameter.VAR_KEYWORD for p in parameters.values()) and (
+        positional_only := [
+            name
+            for name in kwargs
+            if name in parameters and parameters[name].kind is Parameter.POSITIONAL_ONLY
+        ]
+    ):
+        msg = (
+            "got some positional-only arguments passed as keyword arguments: "
+            f"{', '.join(positional_only)} for step '{step_name}'"
+        )
+        raise PositionalOnlyArgumentError(msg)
+
     try:
+        arguments_signature.bind_partial(*args, **kwargs)  # surplus and unknown arguments first
         return arguments_signature.bind(*args, **kwargs)
     except TypeError as error:
         raise to_argument_error(error, step_name) from error
