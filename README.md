@@ -2,6 +2,8 @@
 
 A lightweight, typed Python library for composing functions into readable, reusable **flows** — a functional replacement for the fluent-interface (method-chaining) pattern, with flows that can be defined, validated and stored as **JSON**.
 
+**Documentation: <https://aaltatan.github.io/pyflowstep/>**
+
 `pyflowstep` focuses on a functional style:
 
 - steps are plain functions: `(subject, *args, **kwargs) -> subject`

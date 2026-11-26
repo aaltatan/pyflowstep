@@ -39,6 +39,7 @@ classifiers = [
 [project.urls]
 Homepage = "https://github.com/aaltatan/pyflowstep"
 Repository = "https://github.com/aaltatan/pyflowstep"
+Documentation = "https://aaltatan.github.io/pyflowstep/"
 Issues = "https://github.com/aaltatan/pyflowstep/issues"
 
 [build-system]
@@ -52,6 +53,9 @@ dev = [
     "pyspecification>=4.1.0",
     "pytest>=9.1.1",
     "pytest-coverage>=0.0",
+]
+docs = [
+    "mkdocs-material>=9.8.2",
 ]
 
 [tool.pytest.ini_options]
